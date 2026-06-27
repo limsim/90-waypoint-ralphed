@@ -161,6 +161,14 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     printf '%s' "$PROMPT" | claude --dangerously-skip-permissions --print --output-format stream-json --verbose "${MODEL_ARGS[@]}" 2>&1 | tee /dev/stderr || true
   fi
 
+  # Safety net: capture anything the agent left uncommitted this iteration so each
+  # iteration is a discrete commit. No-op when the working tree is already clean.
+  if [[ -n "$(git status --porcelain)" ]]; then
+    git add -A
+    git commit -m "chore: $STORY_ID iteration $i of $MAX_ITERATIONS (ralph auto-commit)" || true
+    echo "Auto-committed leftover changes for iteration $i."
+  fi
+
   echo "Iteration $i complete. Continuing..."
   sleep 2
 done
