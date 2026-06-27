@@ -3,3 +3,9 @@ PROGRESS.md
 .ralph/
 PROMPT_plan.md
 PROMPT_build.md
+
+# Build / tooling artifacts
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
