@@ -62,3 +62,16 @@ test("Turn.Left has value 'L'", () => {
 test("Turn.Right has value 'R'", () => {
   assert.strictEqual(Turn.Right, "R");
 });
+
+// 4-turn cycle invariant: applying the same turn 4 times must return to the original heading
+test("Heading: 4 Right turns from North returns to North", () => {
+  let h = Heading.North;
+  for (let i = 0; i < 4; i++) h = h.apply(Turn.Right);
+  assert.strictEqual(h, Heading.North);
+});
+
+test("Heading: 4 Left turns from East returns to East", () => {
+  let h = Heading.East;
+  for (let i = 0; i < 4; i++) h = h.apply(Turn.Left);
+  assert.strictEqual(h, Heading.East);
+});
