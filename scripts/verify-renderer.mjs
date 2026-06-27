@@ -112,18 +112,38 @@ function verifyDraw(count, seed) {
     assert.equal(h.ly % CELL, 0, `horizontal lattice-aligned at y=${h.ly}`);
     assert.ok(h.ly >= minY - 1e-9 && h.ly <= maxY + 1e-9, `horizontal y=${h.ly} inside padded box`);
   }
+  // AC: "60px cells" — consecutive lattice lines are exactly one cell apart (verified from the ops,
+  // not just inferred from each line being a multiple of 60).
+  const vxs = [...new Set(verticals.map((v) => v.lx))].sort((a, b) => a - b);
+  const hys = [...new Set(horizontals.map((h) => h.ly))].sort((a, b) => a - b);
+  for (let i = 1; i < vxs.length; i++) assert.equal(vxs[i] - vxs[i - 1], CELL, `vertical grid cell is ${CELL}px at x=${vxs[i]}`);
+  for (let i = 1; i < hys.length; i++) assert.equal(hys[i] - hys[i - 1], CELL, `horizontal grid cell is ${CELL}px at y=${hys[i]}`);
 
-  // AC: orthogonal path — one connected polyline through waypoint centres, dark grey/black, 2px.
+  // AC: orthogonal path — ONE connected polyline through the waypoint centres, dark grey/black, 2px.
+  // Verified from the RECORDED path ops (not re-derived from the walk): the renderer must emit a single
+  // moveTo at waypoint 1 then exactly n-1 lineTos through waypoints 2..n IN ORDER, every step axis-aligned.
+  // That proves "connected" (one subpath / one moveTo), "through the centres" (coords match the waypoints),
+  // and "orthogonal — no diagonals, no mid-segment corners" (each step shares an axis; corners only at wps).
   const pathStroke = ops.find((o) => o.op === "stroke" && o.strokeStyle === "#222222");
   assert.ok(pathStroke, "path is stroked dark");
   assert.equal(pathStroke.lineWidth, 2, "path is 2px");
   const pathIdx = ops.indexOf(pathStroke);
-  const polyMoves = ops.slice(0, pathIdx).filter((o) => o.op === "moveTo");
-  const start = polyMoves[polyMoves.length - 1]; // the path moveTo follows all grid moveTos
-  assert.ok(start && start.lx === walk.waypoints[0].position.x && start.ly === walk.waypoints[0].position.y, "polyline starts at waypoint 1");
-  for (let i = 1; i < n; i++) {
-    const p = walk.waypoints[i].position, q = walk.waypoints[i - 1].position;
-    assert.ok(p.x === q.x || p.y === q.y, `segment ${i - 1}->${i} is orthogonal`);
+  let pathBegin = pathIdx;
+  while (pathBegin >= 0 && ops[pathBegin].op !== "beginPath") pathBegin--;
+  assert.ok(pathBegin >= 0, "path has its own beginPath");
+  const pathPts = ops.slice(pathBegin, pathIdx).filter((o) => o.op === "moveTo" || o.op === "lineTo");
+  assert.equal(pathPts.length, n, `path traces ${n} points (1 moveTo + ${n - 1} lineTo)`);
+  assert.equal(pathPts.filter((o) => o.op === "moveTo").length, 1, "path is ONE connected subpath (single moveTo)");
+  assert.equal(pathPts[0].op, "moveTo", "path opens with a moveTo");
+  for (let i = 0; i < n; i++) {
+    const wp = walk.waypoints[i].position;
+    const pt = pathPts[i];
+    if (i > 0) assert.equal(pt.op, "lineTo", `path point ${i} is a lineTo`);
+    assert.ok(pt.lx === wp.x && pt.ly === wp.y, `path point ${i} sits on waypoint ${i + 1}'s centre`);
+    if (i > 0) {
+      const prev = pathPts[i - 1];
+      assert.ok(pt.lx === prev.lx || pt.ly === prev.ly, `path step ${i - 1}->${i} is orthogonal (no diagonal, no mid-segment corner)`);
+    }
   }
 
   // AC: each waypoint a radius-25 circle; terminals (first+last) black fill/white border/white number,

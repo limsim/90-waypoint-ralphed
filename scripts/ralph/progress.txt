@@ -123,6 +123,13 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   `turnLabelPoint`) from `domain/layout-rules.js` so the drawn geometry shares the invariant's source
   of truth. The path is ONE polyline through waypoint centres — orthogonality is free (Segment ctor).
   `DisplayOptions` (showWildcards/showTurns) is accepted by `draw` but only consumed from US-014 on.
+- The renderer regression gate is `scripts/verify-renderer.mjs` (`npm run verify:renderer`); EXTEND it
+  when US-014/US-015 add to `draw()`. Assert from the RECORDED OPS, not from the input `Walk`: the walk
+  is orthogonal/connected BY CONSTRUCTION (Segment ctor), so re-deriving those from `walk.waypoints`
+  proves the domain, not the drawing. To catch a renderer regression, read what was emitted (moveTo/
+  lineTo coords + count + single moveTo per subpath; consecutive grid lattice gaps === 60) and compare
+  to the waypoint centres. Isolate one drawn subpath by finding its terminating `stroke` (unique
+  strokeStyle, e.g. #222 for the path) and walking back to the nearest preceding `beginPath`.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -959,4 +966,46 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - The renderer does ONLY a translate in US-013; US-015 owns the A4 cap / downscale / centre / fit.
     A count=10 walk's content box (~580px) fits A4 (794x1123) without scaling, so it's the clean
     fixture for a US-013 screenshot; larger counts (e.g. 40/90) will overflow until US-015 lands.
+---
+
+## 2026-06-28 - US-013 (Canvas renderer - grid, segments, waypoints) — REFINEMENT
+- US-013 already passed; re-verified all acceptance criteria against the implementation and the full
+  gate is green: `tsc -b` typecheck clean; `npm test` -> 243 pass, 0 fail (adapters carry no committed
+  node:tests by design — tsconfig.test references core only); `npm run verify:renderer` passes for
+  counts 2/10/20/90 + clear() + null-context-throw. canvas-renderer.ts needed NO change this pass —
+  it correctly draws the white bg (screen space), the 60px lattice grid clipped to boundingBox+100px,
+  the single #222 2px orthogonal polyline, and the r=25 numbered waypoints (terminals black/white/white,
+  interiors white/black/black). The only outstanding AC item is the human browser screenshot (no
+  browser/Playwright MCP in this env — the qlmanage rasterization of recorded draw-calls is the stand-in).
+- Refinement (regression gate hardening, scripts/verify-renderer.mjs — NO impl change): closed two
+  assertion gaps where an AC was implemented but the harness verified it from the WALK DATA rather than
+  from the RENDERER'S RECORDED OPS, so a renderer regression could have slipped through:
+  - **AC2 "60px cells"**: previously asserted each grid line is lattice-aligned (`lx % 60 === 0`) but
+    never that consecutive lines are one cell apart. Now sorts the unique vertical x's / horizontal y's
+    and asserts every consecutive gap === 60. `%60===0` alone would pass a buggy grid that skipped or
+    doubled cells; the gap check pins true 60px spacing.
+  - **AC3 "one connected orthogonal polyline through the waypoint centres, no mid-segment corners"**:
+    the prior check took the path's start moveTo from the ops but then re-derived orthogonality from
+    `walk.waypoints` (which is orthogonal BY CONSTRUCTION via the Segment ctor — so it proved the walk,
+    not the drawing). Now isolates the path's own subpath (walk back from the #222 stroke to its
+    beginPath) and asserts against the RECORDED ops: exactly n points = 1 moveTo + (n-1) lineTo, a
+    SINGLE moveTo (one connected subpath), point i sits on waypoint i+1's centre IN ORDER, and each
+    step shares an axis (lx===prev.lx || ly===prev.ly). This verifies connectedness, through-the-centres,
+    and no-diagonal/no-mid-segment-corner straight from what the renderer drew.
+- Files changed: scripts/verify-renderer.mjs (hardened grid-spacing + path-from-ops assertions),
+  scripts/ralph/prd.json (US-013 notes), scripts/ralph/progress.txt (this entry + a Codebase Pattern).
+- Verified: `npm run clean` + `npm test` -> 243 pass, 0 fail; `npm run verify:renderer` all assertions
+  pass for counts 2/10/20/90; tsc -b typecheck clean.
+- **Learnings for future iterations:**
+  - When hardening the renderer harness, assert from the RECORDED OPS, not from the input Walk. The
+    walk is orthogonal/connected by construction (Segment ctor + consecutive-waypoint derivation), so
+    re-deriving those properties from `walk.waypoints` proves the DOMAIN, not the DRAWING. To catch a
+    renderer regression you must read what the renderer actually emitted (moveTo/lineTo coords + count +
+    single-subpath) and compare it to the waypoint centres.
+  - To isolate a single drawn subpath in the recorded ops: find the terminating stroke (by its unique
+    strokeStyle, e.g. #222 for the path) and walk backwards to the nearest preceding `beginPath`; the
+    moveTo/lineTo ops in that slice are exactly that subpath. The grid is a separate save/beginPath/
+    stroke/restore block, so this cleanly separates path ops from grid ops.
+  - US-014/US-015 extend draw() — when they do, ADD their assertions to scripts/verify-renderer.mjs
+    (it's the committed regression gate, run via `npm run verify:renderer`), and assert from the ops.
 ---
