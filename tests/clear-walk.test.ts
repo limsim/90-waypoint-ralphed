@@ -88,6 +88,23 @@ test("clearing an already-empty state is safe and idempotent", () => {
   assert.equal(renderer.clearCalls, 2);
 });
 
+test("execute is synchronous (returns void, not a Promise)", () => {
+  // Unlike GenerateWalk.execute (async — it cooperatively yields around long generation), ClearWalk
+  // has no long-running work, so execute is a plain synchronous method. US-016 (dom-controls) relies
+  // on this: it calls clearWalk.execute() directly on the Clear button and before each Generate
+  // without awaiting. Pin the contract so a stray `async` (which would make execute return a pending
+  // Promise and silently defer the clear past the synchronous caller) is caught.
+  const renderer = new FakeRenderer();
+  renderer.draw(makeWalk(), OPTIONS);
+
+  // execute(): void — capture the return as `unknown` so we can assert it is not a thenable. A
+  // Promise is never `undefined`, so `=== undefined` alone proves the method is not async.
+  const returned = new ClearWalk(renderer).execute() as unknown;
+
+  assert.equal(returned, undefined, "execute must return undefined (void), i.e. not a Promise");
+  assert.equal(renderer.isEmpty, true, "clear took effect synchronously, before this assertion");
+});
+
 test("clear after generate-draw-clear cycles always leaves the state empty", () => {
   // Mirrors the real flow: generate (draw) then clear, repeatedly. Each clear must reset to empty
   // regardless of the prior walk, and the use case holds no state across calls.

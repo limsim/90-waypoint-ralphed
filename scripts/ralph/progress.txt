@@ -80,6 +80,16 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   the use-case result equals the result of driving `walkGenerator.generate` synchronously for the
   SAME seed — the async wrapper must not perturb the random stream. A `function*` count guard fires
   on the first `.next()`, so `execute(badCount, ...)` REJECTS — assert via `assert.rejects`.
+- `ClearWalk` (src/application/clear-walk.ts) is the STATELESS counterpart to GenerateWalk: it injects
+  ONLY the Renderer port and `execute(): void` just calls `renderer.clear()`. Per ADR-0003 the app is a
+  stateless generative toy (repository/persistence "deliberately omitted as unjustified ceremony"), so
+  there is NO stored current-walk object — the rendered view IS the current-walk state, and "reset to
+  empty" means emptying that view through the Renderer port. Don't add a held `currentWalk` field /
+  repository to satisfy a "clear the state" AC; the port IS the state boundary. ClearWalk.execute is
+  SYNCHRONOUS (no long-running work to yield around, unlike GenerateWalk.execute which is async) — US-016
+  calls it directly without await. To headless-test a use case that clears via the Renderer port, give
+  the FakeRenderer a `current: Walk|null` field (draw sets it, clear nulls it) and an `isEmpty` getter so
+  the "state empty after clear" AC is directly assertable with no DOM/Canvas.
 - Counting awaits (microtask Yield double) and PROVING the event loop is freed are DIFFERENT contracts.
   A `Promise.resolve()`/`async()=>{}` Yield is a MICROTASK and never cedes to the render/paint queue —
   so it can't prove the "UI paints between batches" AC. For that, inject a MACROTASK Yield
@@ -832,3 +842,44 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - This same macrotask-Yield double is the headless stand-in for US-021's production Yield (whose
     `yieldToEventLoop()` must be a macrotask, e.g. setImmediate/MessageChannel, NOT `queueMicrotask`/
     `Promise.resolve` — a microtask would starve paint and defeat the whole overlay design).
+---
+
+## 2026-06-28 - US-012 (ClearWalk use case)
+- US-012 reached this run as `passes:false` with implementation + tests ALREADY present (committed by a
+  prior "ralph auto-commit (iteration 1 of 3)" that wrote good code but never ran the gate or flipped
+  the PRD flag). This run re-verified it against all 4 acceptance criteria, found it complete, closed one
+  test gap, ran the quality gate green, and marked US-012 passes:true.
+- Implementation (src/application/clear-walk.ts — unchanged this run, confirmed correct): `ClearWalk`
+  injects ONLY the Renderer port; `execute(): void` calls `renderer.clear()`. Per ADR-0003 (stateless
+  generative toy; repository/persistence "deliberately omitted as unjustified ceremony") there is no
+  stored current-walk — the rendered view IS the current-walk state, so "reset to empty" = empty that
+  view through the port. Depends only on an application port (no DOM/Canvas/domain mutation — enforced by
+  tsconfig.core having no DOM lib). Mirrors GenerateWalk's injected-collaborators/no-held-state shape, but
+  is SYNCHRONOUS (no long generation to yield around).
+- AC coverage check: (1) "resets current-walk state to empty; depends only on domain + ports" -> the
+  state-empty-after-clear test + port-only dependency (mechanically enforced). (2) "Headless test asserts
+  state is empty after clear" -> `clear empties the current-walk state` asserts renderer.isEmpty===true.
+  (3) tests pass / (4) typecheck passes -> gate green below.
+- Test gap closed (tests/clear-walk.test.ts, 5 -> 6 tests): added `execute is synchronous (returns void,
+  not a Promise)`. The prior tests asserted state/behaviour but never the SYNC contract — that execute
+  returns undefined (not a pending Promise). This matters for US-016 (dom-controls), which calls
+  clearWalk.execute() directly on Clear and before each Generate WITHOUT awaiting; a stray `async` would
+  silently defer the clear past the synchronous caller. Asserting `returned === undefined` proves not-a-
+  Promise (a Promise is never undefined); cast the void return through `as unknown` because `instanceof`
+  rejects an `unknown`/`void` left-hand side (TS2358).
+- Files changed: tests/clear-walk.test.ts (+1 test), scripts/ralph/prd.json (US-012 passes:true + notes),
+  scripts/ralph/progress.txt (this entry + a Codebase Pattern). clear-walk.ts itself needed no change.
+- Verified: `npm run clean` + `npm run typecheck` clean; `npm test` -> 243 pass (242 prior + 1 new), 0 fail.
+- **Learnings for future iterations:**
+  - When a story arrives `passes:false` but the files already exist (from an auto-commit), treat it as a
+    verify-and-finish pass: re-check every AC, run the FULL gate (clean+typecheck+test), close any obvious
+    test gap, THEN set passes:true. Don't assume prior code is wrong, but don't assume it's gate-verified
+    either — the auto-commit may have skipped the gate.
+  - Don't introduce a held `currentWalk` field or a repository to satisfy a "clear the current-walk state"
+    AC in this app: ADR-0003 omits persistence, so the Renderer port IS the state boundary; clearing the
+    view IS resetting the state. Adding stored state would be unjustified ceremony and break the stateless
+    use-case shape established by GenerateWalk/ClearWalk.
+  - `instanceof` cannot take an `unknown`- or `void`-typed left-hand side (TS2358). To assert a void method
+    "is not a Promise", capture the return as `... as unknown` and assert `=== undefined` (a Promise is
+    never undefined) rather than `instanceof Promise`.
+---

@@ -201,8 +201,8 @@
         "Typecheck passes"
       ],
       "priority": 12,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "src/application/clear-walk.ts: `ClearWalk` use case. Constructor injects ONLY the Renderer driven port; `execute(): void` (SYNCHRONOUS — unlike GenerateWalk.execute which is async to yield around long generation) calls `renderer.clear()`. Per ADR-0003 this is a STATELESS generative toy — repository/persistence is 'deliberately omitted as unjustified ceremony', so there is no stored current-walk to mutate: the rendered view IS the current-walk state, and clearing it (removing every waypoint+line) through the Renderer port resets that state to empty. Depends only on application ports (no DOM/Canvas/domain mutation — mechanically enforced by tsconfig.core having no DOM lib), mirroring GenerateWalk's injected-collaborators/no-held-state shape. US-016 (dom-controls) calls execute() directly on the Clear button and before each Generate (no await — relies on the sync contract). tests/clear-walk.test.ts: 6 tests — state empty after clear (the AC, via a FakeRenderer whose `current: Walk|null` models 'what is on screen'); clear() reaches the port exactly once; clear never draws; idempotent on an already-empty state (both clears reach the port); generate-draw-clear cycles (counts 10/40/90) always end empty (proves the use case holds no cross-call state); execute is synchronous (returns undefined, not a Promise — pins the no-async contract US-016 depends on). 243 total pass."
     },
     {
       "id": "US-013",
