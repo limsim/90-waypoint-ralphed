@@ -227,3 +227,19 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - Stub a `RandomSource` in tests with a simple closure over a values array cycling via `i++ % values.length` — no external seeding library needed.
   - The `< 0.5` threshold is the canonical Left/Right split; exact boundary (0.5) maps to Right — document this if it matters for reproducibility.
 ---
+
+## 2026-06-27 - US-005 (TurnSequence value object) — REFINEMENT
+- US-005 already passed; all 5 acceptance criteria verified green.
+- Refinement: added bounds checking to `get(index)` and 4 new tests (10 → 14 TurnSequence tests, 77 → 81 total):
+  - `get()` now throws `RangeError` with "out of bounds" message for index < 0 or index >= length; previously silently returned `undefined` typed as `Turn` — a correctness hole the walk generator (US-010) would hit calling `seq.get(k-2)`.
+  - New test: negative `waypointCount` throws (was untested; guard was correct but unexercised).
+  - New test: exact `0.5` boundary maps to `Turn.Right` (documents the canonical L/R split precisely).
+  - New tests: `get()` out-of-bounds throws `RangeError` for both `>= length` and negative index.
+- Files changed:
+  - src/domain/turn-sequence.ts (bounds check in `get()`)
+  - tests/turn-sequence.test.ts (4 tests added)
+- All 81 tests pass; typecheck clean.
+- **Learnings for future iterations:**
+  - `get(index)` now throws `RangeError` with "out of bounds" in the message — US-010 walk generator can rely on it rather than adding its own bounds check.
+  - The exact 0.5 boundary mapping to `Right` is now a documented contract in a test; if US-010 ever changes the threshold it will be caught here first.
+---
