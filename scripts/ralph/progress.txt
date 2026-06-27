@@ -53,6 +53,13 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   4242, count=10, 200x200 region needs exactly 4 growths.) When refining an already-correct story,
   prefer adding tests for ACs that are implemented-but-never-asserted — grep existing tests per AC
   phrase first (e.g. wildcard COUNT was tested but wildcard POSITION-variance was not).
+- To exercise the walk-generator's per-batch (~50 attempts) progress yield deterministically, reuse
+  the impossible-fit setup (100x100 initialRegion, maxGrowths:0, count=10 — nothing fits, proven by
+  the failure test) but raise maxPlacementAttempts ABOVE yieldEvery (e.g. 120): re-roll 0 then runs
+  the full inner loop and the `attempts % yieldEvery === 0` yields fire at 50/100 with rerolls still
+  0. Same setup pins the failure signal's running totals (attempts === maxPlacementAttempts*sizes,
+  rerolls === maxRerolls). It's robust because the inner loop always runs to its cap regardless of
+  whether any individual placeOnce succeeds (attempts++ happens before placeOnce is called).
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -646,4 +653,35 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     ACs that are IMPLEMENTED but never directly ASSERTED (here: the growth-rescue and "randomised
     wildcard positions" clauses). Grep the existing tests for each AC phrase before adding — the
     wildcard COUNT was tested, the wildcard POSITION-VARIANCE was not.
+---
+
+## 2026-06-27 - US-010 (walk-generator domain service) — REFINEMENT
+- US-010 already passed; re-verified all 9 acceptance criteria against the implementation — still
+  green, no implementation change needed. This pass adds 1 test that closes the last AC clause the
+  prior passes left implemented-but-unasserted (25 -> 26 walk-generator tests, 224 -> 225 total).
+- Gap closed: the progress AC reads "yields a small progress value roughly every batch (~50
+  attempts, OR once per re-roll)". The per-re-roll half was covered (the monotonicity test uses
+  maxPlacementAttempts:2 and so NEVER reaches a 50-attempt batch boundary), but the per-batch
+  (~50 attempts) half had no test. New test (tests/walk-generator.test.ts):
+  - **per-batch progress yield** — reuses the impossible-fit setup (100x100 initialRegion,
+    maxGrowths:0, count=10 — nothing fits, already proven by the failure test) but with
+    maxPlacementAttempts:120 so re-roll 0 runs the full inner loop without succeeding. The default
+    yieldEvery=50 then emits batch yields at attempts 50 and 100, both with rerolls still 0 —
+    asserted via `assert.deepEqual(batchYields.map(p => p.attempts), [50, 100])`. The SAME test also
+    pins the terminal failure signal's running totals (attempts===120, rerolls===1); prior failure
+    tests asserted only `rerolls` and the reason string, never `attempts` (which US-020 surfaces).
+  - Empirically confirmed via a dist/ probe before writing: progress = [{0,0},{50,0},{100,0}],
+    result = {ok:false, attempts:120, rerolls:1}. Deterministic and non-fragile: nothing fits a
+    100x100 region so the inner loop always runs to its cap, independent of any single placeOnce
+    succeeding (attempts++ precedes the placeOnce call).
+- Files changed: tests/walk-generator.test.ts (+1 test), scripts/ralph/prd.json (US-010 notes),
+  scripts/ralph/progress.txt (this entry + a Codebase Pattern).
+- Verified: `npm run clean` + `npm test` -> 225 pass, 0 fail; `npm run typecheck` clean.
+- **Learnings for future iterations:**
+  - The two halves of a "yields X OR Y" progress AC need SEPARATE tests — a config that forces many
+    re-rolls (small maxPlacementAttempts) can never also cross a within-re-roll batch boundary, and
+    vice versa. Cover each branch with its own config rather than assuming one test exercises both.
+  - Reuse a setup an existing test already PROVES (here the 100x100-never-fits region) when adding a
+    new assertion about behaviour along the same path — it inherits that test's robustness argument
+    instead of introducing a fresh fragile fixture.
 ---

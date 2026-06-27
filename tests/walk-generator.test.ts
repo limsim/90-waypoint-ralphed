@@ -250,6 +250,42 @@ test("progress values are non-decreasing and yielded once per re-roll", () => {
   assert.ok(progress.some(p => p.rerolls === 3));
 });
 
+test("a batch progress value is yielded every ~50 attempts within a single re-roll", () => {
+  // The AC requires progress "roughly every batch (~50 attempts, OR once per re-roll)". The
+  // monotonicity test above covers the per-re-roll half (maxPlacementAttempts:2 never reaches a
+  // batch boundary); this pins the per-batch half. A 100x100 region can never fit a 10-waypoint
+  // walk (proven by the failure test below), so with growth disabled re-roll 0 runs all 120
+  // placement attempts without succeeding — and the default yieldEvery=50 must emit batch yields
+  // at attempts 50 and 100, both still inside re-roll 0 (rerolls stays 0).
+  const gen = walkGenerator.generate(10, new SeededRandom(7), {
+    initialRegion: new Bounds(0, 0, 100, 100),
+    maxGrowths: 0,
+    maxPlacementAttempts: 120,
+    maxRerolls: 1,
+  });
+  const progress: GenerationProgress[] = [];
+  let step = gen.next();
+  while (!step.done) {
+    progress.push(step.value);
+    step = gen.next();
+  }
+  // Mid-re-roll batch yields: rerolls still 0, attempts at each multiple of yieldEvery (50).
+  const batchYields = progress.filter(p => p.rerolls === 0 && p.attempts > 0);
+  assert.deepEqual(
+    batchYields.map(p => p.attempts),
+    [50, 100],
+    "expected batch progress at attempts 50 and 100 within re-roll 0"
+  );
+  // The terminal failure signal reports the true running total of attempts made and the re-roll
+  // count consumed (US-020 surfaces these to the user) — not a stale or reset counter.
+  const result = step.value as GenerationResult;
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.attempts, 120); // all 120 attempts of the single re-roll were counted
+    assert.equal(result.rerolls, 1); // maxRerolls re-rolls were exhausted
+  }
+});
+
 // ---- failure signal ----
 
 test("the failure signal is reachable when the bounds can never fit the walk", () => {
