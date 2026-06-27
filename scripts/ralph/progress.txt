@@ -474,3 +474,19 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - Adding `nextInt` to the `RandomSource` interface requires updating all existing stubs — search for `{ nextFloat:` when extending the interface to catch them all. Currently only `turn-sequence.test.ts` had a stub.
   - Port interfaces (`Renderer`, `Yield`) belong in `src/application/` — they define contracts the application layer uses; the domain layer owns `RandomSource` since it's consumed by domain services (TurnSequence, walk-generator).
 ---
+
+## 2026-06-27 - US-009 (Driven ports and a seedable RandomSource) — REFINEMENT
+- US-009 already passed; all 5 acceptance criteria verified green.
+- Refinement: added 4 tests to tests/seeded-random.test.ts (9 → 13 SeededRandom tests, 193 → 197 total):
+  - **Golden sequence test** — asserts specific mulberry32 output for seed=42 (nextFloat #1/2/3 + nextInt(60,140) + nextInt(0,1)). Any change to the PRNG algorithm fails here with a concrete diff, not just a "different seed matches different seed" failure.
+  - **Mixed nextFloat+nextInt reproducibility** — two instances with seed=333 produce the same interleaved sequence across 30 calls (alternating nextFloat/nextInt). Critical regression guard for the walk-generator (US-010) which mixes both call types.
+  - **seed=0 edge case** — verifies that a zero seed produces valid [0,1) values; mulberry32's initial `+0x6d2b79f5` means state=0 is non-degenerate.
+  - **seed=0xFFFFFFFF (32-bit max) edge case** — verifies `>>> 0` truncation handles the maximum 32-bit value without overflow or degenerate output.
+- Files changed:
+  - tests/seeded-random.test.ts (4 tests added)
+- All 197 tests pass; typecheck clean.
+- **Learnings for future iterations:**
+  - The golden-sequence test is the most important regression guard for a PRNG: same-seed determinism tests only confirm "A equals B right now", not "A equals the known-correct value." Add golden tests before the PRNG is depended on by downstream stories.
+  - Interleaving nextFloat and nextInt calls is deterministic because both go through the same internal `this.state` mutation; mixing them in tests exercises the real usage pattern of the walk-generator.
+  - seed=0 is safe for mulberry32: the initial state advance (`+0x6d2b79f5`) makes state non-zero before the first output; no need to guard against zero seed in the constructor.
+---
