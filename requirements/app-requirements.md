@@ -14,10 +14,9 @@ Source: https://www.marcusjohnhenrybrown.com/the-90-waypoint-walk/
 - The walk consists of between **10 and 90 waypoints** (configurable), each representing a turn: **Left (L)** or **Right (R)** relative to the current direction of travel.
 - The turn sequence is **randomised** on each generation — a new sequence of L/R values is generated each time **Generate Walk** is clicked.
 - The walker begins facing **North** (up on the canvas).
-- The first waypoint is always oriented facing North — the walker travels straight North to reach it, with no turn applied. The path from waypoint 1 to waypoint 2 therefore exits straight upward.
-- Turns from the sequence are applied from the **third waypoint** onwards (i.e. the first turn determines how to arrive at waypoint 3).
-- At each waypoint (from waypoint 3 onwards), apply the turn to update the heading: L turns 90° counter-clockwise, R turns 90° clockwise. After the turn, the walker travels in the new heading until the next waypoint.
-- Each waypoint records the **outbound turn** — the turn taken when leaving that waypoint toward the next — not the inbound turn used to arrive. The **first and last waypoints** have no outbound turn and display no turn label.
+- The segment from waypoint 1 to waypoint 2 always points straight **North** — no turn is applied at waypoint 1, so the path exits straight upward.
+- A turn is applied at the waypoint you are **leaving**. Leaving waypoint *k* (for k = 2 … N−1), apply turn `sequence[k−2]` to update the heading (L = 90° counter-clockwise, R = 90° clockwise), then travel in the new heading to waypoint *k*+1. The first turn is therefore applied at **waypoint 2** and shapes the segment toward waypoint 3.
+- Each waypoint records its **outbound turn** — the turn applied when leaving it, not the inbound turn used to arrive. A walk of N waypoints uses exactly **N−2** turns, owned by waypoints 2 … N−1. The **first and last waypoints** have no outbound turn and display no turn label.
 
 ### Distances
 - The distance between consecutive waypoints (segment length) is **randomised per segment**, between **60px and 140px**.
@@ -28,7 +27,7 @@ Source: https://www.marcusjohnhenrybrown.com/the-90-waypoint-walk/
 - A wildcard skips a waypoint's turn — the walker continues straight ahead instead of turning.
 - The number of wildcards scales with the waypoint count: `max(1, round(count / 9))` wildcards per walk.
 - Wildcard positions are **randomised** on each generation.
-- The first and last waypoints cannot be wildcards. Because turns are shifted to record the outbound turn (see below), wildcard selection also excludes position index 1 in the generation sequence, preventing waypoint #1 from inheriting a wildcard state after the shift.
+- The first and last waypoints cannot be wildcards. Wildcard-eligible waypoints are exactly waypoints 2 … N−1 — the same set that owns outbound turns. A wildcard skips that waypoint's turn, so the walker continues straight through it (heading unchanged).
 - Visual indicator marks which waypoints are wildcards: an **orange ring** drawn outside the waypoint circle.
 
 ---
@@ -81,7 +80,7 @@ Source: https://www.marcusjohnhenrybrown.com/the-90-waypoint-walk/
 | **Generate Walk** | Clears the canvas and draws a new walk with a freshly randomised turn sequence and segment distances. The button is disabled and a loading overlay (spinner + "Generating…" label) is shown over the canvas while generation is in progress; both are restored when generation completes. |
 | **Clear** | Removes all waypoints and lines from the canvas. |
 | **Waypoints** | Number input, range 10–90, default 90. Sets the number of waypoints for the next generation. |
-| **Show/Hide Wildcards** | Toggle visibility of wildcard markers. Wildcards are **visible by default**. |
+| **Show/Hide Wildcards** | Toggle visibility of the wildcard **orange rings only** — independent of turn labels. A wildcard's "W" turn label is governed by **Show Turns**, so it can still appear when the rings are hidden. Rings are **visible by default**. |
 | **Show Turns** | Toggle. When enabled, displays the outbound turn direction (L, R, or W for wildcard) beside each waypoint (first and last waypoints show no label). **Visible by default.** |
 | **Print** | Opens the browser print dialog; prints the canvas and legend on a single A4 page with all other UI chrome hidden. |
 
@@ -89,7 +88,11 @@ Source: https://www.marcusjohnhenrybrown.com/the-90-waypoint-walk/
 
 ## Canvas Size
 - The rendered canvas is always capped at A4 size (794×1123px at 96 PPI).
-- Internally, generation starts at A4 size. If no valid layout can be found after 200 attempts at the current size, the internal generation bounds grow by 10% and generation retries. This repeats until a valid walk is produced.
+- Internally, generation starts at A4 size and proceeds in bounded loops to guarantee termination:
+  1. Up to **200** placement attempts at the current internal bounds.
+  2. If none is valid, grow the internal bounds by **10%** and retry — up to **~10 growths** (≈2.6× the original bounds).
+  3. If still no valid layout, **re-randomise the entire turn sequence** and restart from step 1, up to **~20** re-rolls. (The rendered walk's labels always match its own final sequence; this is not a per-turn fallback.)
+  4. If every re-roll fails, abort generation and show a graceful error over the canvas ("Couldn't generate a walk — try again or reduce the waypoint count"), then restore the controls.
 - Once a valid walk is found, the bounding box of the waypoints (plus 100px padding) is computed and scaled down uniformly to fit within A4 if it exceeds those dimensions. Walks that already fit within A4 are not scaled.
 - The path auto-centres after generation so the full walk is visible within the canvas.
 - If the canvas is wider than the viewport, it scales down to fit (preserving aspect ratio) so it always fits on screen without horizontal scrolling.
@@ -97,14 +100,14 @@ Source: https://www.marcusjohnhenrybrown.com/the-90-waypoint-walk/
 ---
 
 ## Interaction
-- Clicking on a waypoint circle displays a tooltip/label showing: waypoint number, turn direction (L/R/Wildcard), and cumulative distance from the start in px.
+- Clicking on a waypoint circle displays a tooltip showing: waypoint number, turn direction (L / R / Wildcard), and cumulative distance from the start in **generation-space px** (the true summed segment lengths, stable across window resizes). The tooltip is a **DOM overlay element** (not painted on the canvas) so it survives redraws; it dismisses on Clear, Generate, or a click on empty canvas.
 - Hovering over a waypoint: cursor changes to pointer, the waypoint gains a drop shadow, and its connecting path segments are thickened to 4px.
 - Moving off the canvas removes all hover highlighting.
 
 ---
 
 ## Legend
-- A legend is displayed below the canvas and is included in print output.
+- A legend is displayed below the canvas as **DOM/HTML** (not canvas-painted) and is included in print output via the print stylesheet.
 - It contains three entries: **Start / End** (black filled circle), **Waypoint** (white filled circle with black border), **Wildcard** (orange ring — walker goes straight).
 
 ---
@@ -115,7 +118,9 @@ Source: https://www.marcusjohnhenrybrown.com/the-90-waypoint-walk/
 ---
 
 ## Technology
-- Vanilla TypeScript with the Canvas 2D API — no external runtime dependencies.
-- Single-file source (`src/index.ts`) compiled to `dist/index.js`, loaded by `index.html`.
+- Vanilla TypeScript with the Canvas 2D API — **no external runtime dependencies** (dev/test dependencies such as TypeScript and a test runner are fine).
+- **Domain-Driven Design + hexagonal architecture** (see `docs/adr/0003`). Source is organised as a pure `src/domain/` core, `src/application/` use cases, and `src/adapters/` (a driving DOM adapter plus driven canvas-renderer and random-source adapters), wired in `src/main.ts`. The DOM and Canvas APIs appear only in the adapter files; the domain and application layers are framework-free and headless-testable.
+- Compiled by `tsc` to ES modules and loaded by `index.html` via `<script type="module">`.
 - Build: `npm run build` (TypeScript compiler).
+- Test: `npm test` (headless `node:test` against the pure domain core).
 - Dev: `npm run dev` (watch mode) + `npm run serve` (Node.js static server, starts on port 8000 and automatically tries the next port if that port is already in use).
