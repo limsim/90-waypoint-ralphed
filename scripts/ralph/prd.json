@@ -134,8 +134,8 @@
         "Typecheck passes"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "src/domain/walk.ts: Walk aggregate, always-valid by construction. Walk.create(waypoints, bounds) runs structural checks (>=2 waypoints, sequence 1..N in order, totalWaypoints===N), DERIVES segments from consecutive waypoints (Segment ctor rejects diagonals), then composes layout-rules.checkLayout into the invariant and throws on any violation. No isValid(). Exposes waypoints, segments (N-1), boundingBox (tight gen-space box), cumulativeDistances[] (per-waypoint from start), plus waypointCount/totalDistance/cumulativeDistanceTo(i). bounds param is the GENERATION REGION for the within-bounds(30px) check; boundingBox is the separate tight box for rendering. tests/walk.test.ts: 17 tests - known-good 4-wp walk constructs; each of the 6 layout rules + 4 structural rules throw. Fixtures verified to isolate their target rule (rule4 also fires rule3 since the 25px check is subsumed by the 35px one)."
     },
     {
       "id": "US-009",

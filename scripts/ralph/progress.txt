@@ -24,6 +24,13 @@ Started: Sat 27 Jun 2026 18:13:25 BST
 - layout-rules adjacency model: `segments[i]` (0-indexed) is adjacent to `waypoints[i]` and
   `waypoints[i+1]`. Everything else is "non-adjacent". US-008 (Walk) and US-010 (generator) must use
   this same index convention when calling the layout-rule predicates.
+- `Walk.create(waypoints, bounds)` (src/domain/walk.ts) DERIVES segments from consecutive waypoints
+  (`new Segment(wps[i].position, wps[i+1].position)`) — callers (US-010 generator) pass ONLY the placed
+  waypoints + the generation region, never a separate segments array. This makes the layout-rules
+  adjacency model true by construction. `bounds` = generation REGION (for the within-bounds 30px check);
+  `walk.boundingBox` = the separate TIGHT box around waypoints (US-013/US-015 render/A4-fit use this one).
+- layout-rules predicates take mutable `Waypoint[]`/`Segment[]`; when holding `ReadonlyArray`, spread-copy
+  (`[...waypoints]`) before calling `checkLayout`/predicates or tsc rejects the readonly→mutable arg.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -403,4 +410,41 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - `noWaypointCirclesOverlap` uses `Math.hypot` so diagonal distances are checked correctly; the boundary condition (`< 2*WAYPOINT_RADIUS`, i.e. `< 50`) is strict — exact distance 50 passes.
   - The adjacency model works correctly for 4+ waypoint walks: seg[i] is non-adjacent to all waypoints except wi=i and wi=i+1. Tests with 4-waypoint walks are needed to confirm middle-segment non-adj pairs are checked.
   - Wildcard waypoints are interior by definition (wildcards are confined to positions 2..N-1); `turnLabelsClearOfNonAdjacentSegments` does NOT skip them — only `isTerminal` waypoints are skipped.
+---
+
+## 2026-06-27 - US-008 (Walk always-valid aggregate root)
+- Implemented `src/domain/walk.ts`: the `Walk` aggregate root, always valid by construction (docs/adr/0004).
+  - `Walk.create(waypoints, bounds)`: structural checks (>=2 waypoints; sequence numbers 1..N in order;
+    every waypoint's `totalWaypoints === N`) -> DERIVES `segments` from consecutive waypoint positions
+    (the `Segment` ctor rejects diagonal/zero-length steps) -> composes `layout-rules.checkLayout(...)`
+    into the invariant and THROWS (`Invalid Walk layout: <rule>, ...`) on any violation. No `isValid()`.
+  - Exposes: `waypoints` (ReadonlyArray, ordered 1..N), `segments` (ReadonlyArray, N-1, segments[i] joins
+    waypoints[i]->waypoints[i+1]), `boundingBox` (tight gen-space `Bounds` around waypoint centres),
+    `cumulativeDistances` (ReadonlyArray<number>, per-waypoint distance from start; [0]=0). Conveniences:
+    `waypointCount`, `totalDistance`, `cumulativeDistanceTo(index)` (RangeError out of bounds).
+  - Built from a FINISHED placement (waypoints + region), never incrementally — no draft Walk (ADR-0004).
+- Files changed:
+  - src/domain/walk.ts (new — Walk aggregate)
+  - tests/walk.test.ts (new — 17 tests)
+  - scripts/ralph/prd.json (US-008 passes:true + notes)
+- All 184 tests pass (167 prior + 17 new); typecheck clean.
+- Verified each violation fixture isolates its target rule via checkLayout probe:
+  good=[], rule1=[circles-overlap], rule2=[parallel-too-close], rule3=[seg-too-close-to-waypoint],
+  rule4=[seg-too-close-to-waypoint, seg-through-circle], rule5=[turn-label-too-close], rule6=[out-of-bounds].
+- **Learnings for future iterations:**
+  - `Walk` DERIVES segments — do NOT pass a segments array to `create`. The generator (US-010) wraps its
+    placement buffer by building `Waypoint` entities (seq 1..N, terminals null-turn, wildcards null-turn)
+    and calling `Walk.create(waypoints, region)`. A bad placement surfaces as a throw from `create`.
+  - Two distinct boxes: `bounds` arg = generation REGION for the within-bounds(30px) rule (the grown bounds
+    the generator places into); `walk.boundingBox` = TIGHT box around waypoints (renderer/A4-fit use this).
+  - Crafting a real orthogonal path that violates ONE specific layout rule is fiddly because the rules
+    couple: e.g. a vertical segment near an interior waypoint's NE label (rule 5) tends to also bring its
+    endpoint near that waypoint (rule 1) or run parallel-close to that waypoint's own vertical segment
+    (rule 2). Resolved rule 5 by routing the offending vertical as a LONG segment whose endpoints stay far
+    while its middle grazes the label, and by giving the labelled waypoint two collinear horizontal
+    neighbours (no adjacent vertical to conflict). rule 4 (<25px) is strictly subsumed by rule 3 (<35px),
+    so a rule-4 fixture necessarily also reports rule 3 — assert the message CONTAINS the target rule name
+    rather than expecting it alone.
+  - layout-rules predicates want mutable `Waypoint[]`/`Segment[]`; spread-copy a `ReadonlyArray` before
+    calling them (the aggregate stores ReadonlyArray for immutability but passes `[...waypoints]` to checks).
 ---
