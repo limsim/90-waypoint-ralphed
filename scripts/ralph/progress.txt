@@ -275,3 +275,25 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - The single `create()` factory takes `totalWaypoints` so it can enforce the terminal/interior distinction. Two-factory alternatives (createTerminal/createInterior) are cleaner to call but make the "wildcards confined to 2..N-1" invariant harder to test in isolation.
   - Interior waypoints with `outboundTurn=null` and `wildcard=false` are not explicitly prevented — they are the last waypoint pattern. Only the combination of `wildcard=true` on a terminal is rejected.
 ---
+
+## 2026-06-27 - US-006 (Waypoint entity) — REFINEMENT
+- US-006 already passed; all 6 acceptance criteria remain green.
+- Refinement: enforced the wildcard semantic invariant — `wildcard=true` with `outboundTurn !== null` now
+  throws `"Wildcard waypoints must have no outbound turn (turn is skipped)"`. Previously the entity silently
+  accepted an inconsistent combination (wildcard flag + non-null turn), which contradicts the "heading-unchanged/
+  turn-skipped" semantics stated in the AC.
+- Added 4 new tests (19 → 23 Waypoint tests, 103 → 107 total):
+  - `wildcard=true` + `Turn.Left` throws (invariant test)
+  - `wildcard=true` + `Turn.Right` throws (invariant test, Right variant)
+  - Negative `sequenceNumber` (-1) throws with "out of range" (prior tests only checked 0 and > N)
+  - `totalWaypoints = 0` throws (prior test only checked `totalWaypoints = 1`)
+- Files changed:
+  - src/domain/waypoint.ts (new guard: wildcard + non-null outboundTurn)
+  - tests/waypoint.test.ts (4 tests added)
+- All 107 tests pass; typecheck clean.
+- **Learnings for future iterations:**
+  - The `wildcard=true` + non-null `outboundTurn` combination is now a hard construction error; US-010
+    walk-generator must pass `null` as the outboundTurn when marking a waypoint as a wildcard.
+  - When a wildcard skips a turn, the sequence still has a Turn value at that position — the generator
+    simply passes `null` as the turn and `true` as the wildcard flag; it does NOT pass the sequence turn.
+---
