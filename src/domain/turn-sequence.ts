@@ -9,6 +9,11 @@ export class TurnSequence {
   }
 
   get(index: number): Turn {
+    if (index < 0 || index >= this.turns.length) {
+      throw new RangeError(
+        `TurnSequence index ${index} out of bounds (length ${this.turns.length})`
+      );
+    }
     return this.turns[index];
   }
 

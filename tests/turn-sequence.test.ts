@@ -73,3 +73,25 @@ test("waypointCount < 2 throws", () => {
     /waypointCount must be at least 2/
   );
 });
+
+test("negative waypointCount throws", () => {
+  assert.throws(
+    () => TurnSequence.generate(-5, stubSource([0.5])),
+    /waypointCount must be at least 2/
+  );
+});
+
+test("nextFloat === 0.5 yields Right (exact boundary)", () => {
+  const seq = TurnSequence.generate(3, stubSource([0.5]));
+  assert.equal(seq.turns[0], Turn.Right);
+});
+
+test("get() throws RangeError for index >= length", () => {
+  const seq = TurnSequence.generate(5, stubSource([0.3]));
+  assert.throws(() => seq.get(seq.length), /out of bounds/);
+});
+
+test("get() throws RangeError for negative index", () => {
+  const seq = TurnSequence.generate(5, stubSource([0.3]));
+  assert.throws(() => seq.get(-1), /out of bounds/);
+});
