@@ -82,3 +82,42 @@ test("SeededRandom implements RandomSource interface structurally", () => {
   assert.equal(typeof rng.nextFloat, "function");
   assert.equal(typeof rng.nextInt, "function");
 });
+
+test("golden sequence: seed=42 produces specific known values (PRNG regression guard)", () => {
+  const rng = new SeededRandom(42);
+  // These values are derived from mulberry32 with seed=42.
+  // Any change to the PRNG algorithm will fail here with a concrete diff.
+  assert.equal(rng.nextFloat(), 0.6011037519201636);
+  assert.equal(rng.nextFloat(), 0.44829055899754167);
+  assert.equal(rng.nextInt(60, 140), 129);
+  assert.equal(rng.nextFloat(), 0.6697340414393693);
+  assert.equal(rng.nextInt(0, 1), 0);
+});
+
+test("mixed nextFloat and nextInt calls are reproducible across two same-seed instances", () => {
+  const a = new SeededRandom(333);
+  const b = new SeededRandom(333);
+  for (let i = 0; i < 30; i++) {
+    if (i % 3 === 0) {
+      assert.equal(a.nextInt(60, 140), b.nextInt(60, 140));
+    } else {
+      assert.equal(a.nextFloat(), b.nextFloat());
+    }
+  }
+});
+
+test("seed=0 produces valid nextFloat values", () => {
+  const rng = new SeededRandom(0);
+  for (let i = 0; i < 50; i++) {
+    const v = rng.nextFloat();
+    assert.ok(v >= 0 && v < 1, `seed=0 value ${v} out of [0,1)`);
+  }
+});
+
+test("seed=0xFFFFFFFF (32-bit max) produces valid nextFloat values", () => {
+  const rng = new SeededRandom(0xffffffff);
+  for (let i = 0; i < 50; i++) {
+    const v = rng.nextFloat();
+    assert.ok(v >= 0 && v < 1, `seed=0xFFFFFFFF value ${v} out of [0,1)`);
+  }
+});
