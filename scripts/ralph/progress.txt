@@ -297,3 +297,29 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - When a wildcard skips a turn, the sequence still has a Turn value at that position — the generator
     simply passes `null` as the turn and `true` as the wildcard flag; it does NOT pass the sequence turn.
 ---
+
+## 2026-06-27 - US-006 (Waypoint entity) — REFINEMENT
+- US-006 already passed; all 6 acceptance criteria remain green.
+- Refinement: added `totalWaypoints` as a stored readonly field and four computed getters:
+  `isFirst`, `isLast`, `isTerminal`, and `isInterior`. These let any consumer (renderer, Walk
+  aggregate, generator) query terminal/interior state from the entity itself rather than needing
+  an external count in scope.
+- Added 14 tests (23 → 37 Waypoint tests, 107 → 120 total):
+  - `totalWaypoints` accessible as a field
+  - `isFirst` true/false for first / interior
+  - `isLast` true/false for last / interior
+  - `isTerminal` true for first, true for last, false for interior
+  - `isInterior` true for interior, false for first/last
+  - Interior non-wildcard with `outboundTurn=null` is allowed (documents the spec boundary)
+  - Minimum 2-waypoint walk: `isFirst`/`isLast` pair verified
+- Files changed:
+  - src/domain/waypoint.ts (totalWaypoints field, isFirst/isLast/isTerminal/isInterior getters)
+  - tests/waypoint.test.ts (14 tests added)
+- All 120 tests pass; typecheck clean.
+- **Learnings for future iterations:**
+  - `Waypoint` now carries `totalWaypoints` as a readonly field; US-008 (Walk aggregate) and US-013
+    (renderer) can call `waypoint.isFirst` / `waypoint.isLast` / `waypoint.isTerminal` without any
+    external count. Prefer these over comparing `sequenceNumber` directly.
+  - `isInterior` is the logical inverse of `isTerminal`; use it to filter the waypoints that carry
+    a meaningful `outboundTurn` or wildcard flag.
+---
