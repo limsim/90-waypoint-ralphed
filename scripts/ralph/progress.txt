@@ -119,3 +119,22 @@ Started: Sat 27 Jun 2026 18:13:25 BST
 - All 16 tests pass; typecheck clean
 - No implementation changes needed — original code was correct
 ---
+
+## 2026-06-27 - US-003 (Heading and Turn value objects)
+- Implemented Heading and Turn value objects in src/domain/
+  - Turn: TypeScript enum with Left="L" / Right="R"
+  - Heading: class with static North/East/South/West instances (dx/dy unit step as readonly fields),
+    apply(turn) method using a 4-element cycle array (Right=+1, Left=+3 mod 4)
+- Files changed:
+  - src/domain/turn.ts (new)
+  - src/domain/heading.ts (new)
+  - tests/heading-turn.test.ts (new, 14 tests: 4 unit vectors + 8 turn combinations + 2 enum values)
+- All 30 tests pass; typecheck clean
+- **Learnings for future iterations:**
+  - Heading.apply() uses a static ALL array cycle; static fields initialise top-to-bottom so ALL must be
+    declared after the four named statics (North, East, South, West) or it will contain undefined.
+  - North points up in screen coordinates: step is (0, -1) i.e. decreasing y.
+  - Left (CCW) = N->W->S->E->N cycle; Right (CW) = N->E->S->W->N cycle.
+  - Use `assert.strictEqual` for reference equality on Heading singletons (apply returns the same static
+    instance, not a new object) — deepEqual would also work but strictEqual is a tighter check.
+---
