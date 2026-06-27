@@ -1,0 +1,2 @@
+# DOM + Canvas adapters (dom-controls.ts, canvas-renderer.ts) land here from US-013 onward.
+# Tracked so the hexagonal layer layout (ADR-0003) exists from the scaffold.

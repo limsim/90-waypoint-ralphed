@@ -17,8 +17,8 @@
         "Typecheck passes"
       ],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Scaffold present: project-reference tsconfigs (core has no DOM lib), ESM/NodeNext, strict. index.html loads dist/src/main.js as a module. src/domain/scaffold.ts + tests/scaffold.test.ts are the trivial placeholder (build->headless-test pipeline). serve.mjs auto-increments 8000->8001 (verified). The reset commit (29db285) left US-002..005 test files behind; removed them as they belong to their own stories and import not-yet-rebuilt src modules."
     },
     {
       "id": "US-002",
