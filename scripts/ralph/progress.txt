@@ -165,3 +165,20 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - The L+R=identity invariant is the strongest single test for a rotation system: it catches any asymmetry
     between Left and Right without requiring knowledge of specific turn directions.
 ---
+
+## 2026-06-27 - US-004 (Segment value object)
+- Implemented Segment value object in src/domain/segment.ts
+  - Construction: accepts horizontal (same y) or vertical (same x); throws on diagonal and zero-length
+  - `orientation`: "horizontal" | "vertical"
+  - `length`: absolute value of the coordinate difference
+  - `distanceFrom(point)`: minimum distance from point to segment — perpendicular distance when the foot is within range, endpoint distance when outside
+  - `parallelOverlap(other)`: returns `{ overlapLength, separation }` for same-orientation segments; returns `null` for perpendicular pairs
+- Files changed:
+  - src/domain/segment.ts (new)
+  - tests/segment.test.ts (new, 23 tests)
+- All 57 tests pass (34 prior + 23 new); typecheck clean.
+- **Learnings for future iterations:**
+  - `parallelOverlap` returns `null` (not an error) for non-parallel pairs — callers check orientation before using the result; US-007 layout-rule predicates will filter on this.
+  - `distanceFrom` uses `Math.hypot` for the off-corner case to avoid manual sqrt; precision is exact for integer inputs.
+  - The `Orientation` type is exported alongside `Segment` so layout-rule code can reference it without re-declaring.
+---
