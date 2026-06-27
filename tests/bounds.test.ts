@@ -73,3 +73,14 @@ test("Bounds: grow preserves centre point", () => {
   assert.equal((grown.minX + grown.maxX) / 2, cx);
   assert.equal((grown.minY + grown.maxY) / 2, cy);
 });
+
+test("Bounds: grow by factor 0.5 halves dimensions from centre", () => {
+  const b = new Bounds(0, 0, 100, 100);
+  const shrunk = b.grow(0.5);
+  assert.equal(shrunk.minX, 25);
+  assert.equal(shrunk.minY, 25);
+  assert.equal(shrunk.maxX, 75);
+  assert.equal(shrunk.maxY, 75);
+  assert.equal(shrunk.width, 50);
+  assert.equal(shrunk.height, 50);
+});
