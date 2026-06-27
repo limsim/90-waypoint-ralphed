@@ -139,7 +139,11 @@ story' guidance above; the story is fixed for this run.
 
 If $STORY_ID already has passes:true, treat this as a REFINEMENT pass: re-check the
 implementation against the story's acceptance criteria, improve quality/robustness/tests,
-re-run the quality gate, and commit any changes. Always leave the build green."
+re-run the quality gate, and commit any changes. Always leave the build green.
+
+Read the PRD from scripts/ralph/prd.json and APPEND your progress to scripts/ralph/progress.txt
+(both relative to the repo-root working directory). Do NOT create or write a prd.json or
+progress.txt at the repo root - those copies are invisible to this runner."
 
 echo "Starting Ralph - Tool: $TOOL - Model: ${MODEL:-default} - Story: $STORY_ID ($STORY_TITLE) - Iterations: $MAX_ITERATIONS"
 
