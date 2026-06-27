@@ -436,3 +436,69 @@ test("turnLabelsClearOfNonAdjacentSegments: vertical non-adj segment beyond 8px 
   ];
   assert.equal(turnLabelsClearOfNonAdjacentSegments(wps, segs), true);
 });
+
+// ---- additional edge-case refinement tests ----
+
+test("noWaypointCirclesOverlap: diagonal 3-4-5 distance exactly 50px passes", () => {
+  // (0,0) to (30,40): hypot = sqrt(900+1600) = 50 → NOT < 50 → pass
+  assert.equal(
+    noWaypointCirclesOverlap([mkWp(1, 2, 0, 0), mkWp(2, 2, 30, 40)]),
+    true
+  );
+});
+
+test("noWaypointCirclesOverlap: diagonal 3-4-5 distance 49px fails", () => {
+  // (0,0) to (29.4,39.2) scaled so hypot = 49 → 49 < 50 → fail
+  // Use integer coords: (0,0) and (30,39) → hypot ≈ 49.24 < 50 → fail
+  assert.equal(
+    noWaypointCirclesOverlap([mkWp(1, 2, 0, 0), mkWp(2, 2, 30, 39)]),
+    false
+  );
+});
+
+test("noSegmentCloseToNonAdjacentWaypoint: 4-waypoint middle segment non-adjacent outer waypoint fails", () => {
+  // L-shaped walk: wp0→(right)→wp1→(down)→wp2→(left)→wp3
+  // seg[1] (horizontal at y=300) is non-adjacent to wp[0] and wp[3]
+  // wp[3] at y=266: dist from seg[1] at y=300 is 34 < 35 → violation
+  const wps = [
+    mkWp(1, 4, 100, 100),
+    mkWp(2, 4, 100, 300, Turn.Right),
+    mkWp(3, 4, 300, 300, Turn.Left),
+    mkWp(4, 4, 300, 266),
+  ];
+  const segs = [
+    mkSeg(100, 100, 100, 300), // seg[0]: adj to wp[0,1]
+    mkSeg(100, 300, 300, 300), // seg[1]: adj to wp[1,2], non-adj to wp[0] and wp[3]
+    mkSeg(300, 300, 300, 266), // seg[2]: adj to wp[2,3]
+  ];
+  assert.equal(noSegmentCloseToNonAdjacentWaypoint(wps, segs), false);
+});
+
+test("allWaypointsWithinBounds: empty waypoints list passes", () => {
+  // Array.every on empty array is vacuously true
+  const bounds = new Bounds(0, 0, 500, 500);
+  assert.equal(allWaypointsWithinBounds([], bounds), true);
+});
+
+test("turnLabelsClearOfNonAdjacentSegments: wildcard interior waypoint label still checked", () => {
+  // Wildcard waypoints are interior (not terminal), so their NE label clearance is still enforced.
+  // wp[1] at (100,200) is wildcard (turn=null, wildcard=true);
+  // NE label ≈ (132.53, 167.47); seg[2] vertical at x=140 → dist ≈ 7.47 < 8 → fail
+  const wps = [
+    mkWp(1, 4, 0, 200),
+    mkWp(2, 4, 100, 200, null, true), // wildcard, no turn
+    mkWp(3, 4, 200, 200, Turn.Right),
+    mkWp(4, 4, 300, 200),
+  ];
+  const segs = [
+    mkSeg(0, 200, 100, 200),
+    mkSeg(100, 200, 200, 200),
+    mkSeg(140, 160, 140, 180),
+  ];
+  assert.equal(turnLabelsClearOfNonAdjacentSegments(wps, segs), false);
+});
+
+test("checkLayout: empty waypoints and segments returns no violations", () => {
+  const bounds = new Bounds(0, 0, 500, 500);
+  assert.equal(checkLayout([], [], bounds).length, 0);
+});
