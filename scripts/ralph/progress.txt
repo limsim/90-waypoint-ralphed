@@ -5,8 +5,12 @@ Started: Sat 27 Jun 2026 18:13:25 BST
 ## Codebase Patterns
 - This repo was "ralphed": commit 29db285 removed `index.html` and `src/**` so the app is rebuilt
   story-by-story. The PRD (`scripts/ralph/prd.json`) drives the order; everything starts `passes:false`.
-- Canonical PRD + progress live in `scripts/ralph/` (that's what `ralph.sh` reads). A duplicate
-  `prd.json` exists at the repo root — ignore it; update the one under `scripts/ralph/`.
+- Canonical PRD + progress live in `scripts/ralph/` (that's what `ralph.sh` reads). Duplicate
+  `prd.json` AND `progress.txt` have appeared at the repo root — a stray run wrote there because the
+  agent resolved bare `progress.txt`/`prd.json` from the repo-root CWD. ALWAYS read/write the copies
+  under `scripts/ralph/`; ignore/remove the root duplicates (US-002 progress was lost this way once).
+- Point and Bounds are pure value objects in `src/domain/` (no DOM/Canvas); `Bounds.grow(factor)`
+  expands/shrinks from the bounding-box centre so the centroid stays stable during generation-space scaling.
 - `ralph.sh` does NOT manage git branches. The agent must `git checkout -b <branchName>` from main itself
   (PRD `branchName` is `ralph/90-waypoint-map`).
 - Quality gate: `npm run build` (tsc -b), `npm test` (tsc -b && node --test glob), `npm run typecheck`.
@@ -89,4 +93,29 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     server already collapsed (becomes a 404 inside ROOT, never hits the 403 path).
   - serve.mjs serves with `Cache-Control: no-store`; when verifying UI stories in the browser a hard
     refresh is unnecessary — reloads always re-fetch fresh compiled modules.
+---
+
+## 2026-06-27 - US-002 (Point and Bounds value objects)
+(Recovered: this run originally logged to the repo-root `progress.txt` by mistake; merged here.)
+- What was implemented: Point and Bounds value objects in src/domain/
+  - Point: immutable (x, y), equals(), translate() returning new Point
+  - Bounds: immutable (minX, minY, maxX, maxY), width/height getters, contains(point, padding=0), grow(factor) expanding from centre
+- Files changed:
+  - src/domain/point.ts (new)
+  - src/domain/bounds.ts (new)
+  - tests/point.test.ts (new, 5 tests)
+  - tests/bounds.test.ts (new, 9 tests)
+- **Learnings for future iterations:**
+  - The source tree was wiped (commit 29db285) so US-002..US-005 implementations were lost even though passes:true; each story may need re-implementation
+  - Bounds.grow() expands from the bounding-box centre — keeps centroid stable during generation-space scaling
+  - contains() padding inset: point at exactly padding distance from edge PASSES (>=, <=); one pixel inside padding strip FAILS
+  - All domain imports between src/domain/ files must use relative paths with .js extension
+---
+
+## 2026-06-27 - US-002 (refinement)
+- Refinement pass: added `Bounds.grow` shrink coverage (factor < 0.5)
+- Files changed:
+  - tests/bounds.test.ts (1 test added, now 10 tests; 16 total across suite)
+- All 16 tests pass; typecheck clean
+- No implementation changes needed — original code was correct
 ---
