@@ -741,3 +741,41 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     create the production RandomSource and `await useCase.execute(count, random)`; branch on
     `result.ok` to render the walk (Renderer port) or the US-020 failure overlay.
 ---
+
+## 2026-06-27 - US-011 (GenerateWalk use case) — REFINEMENT
+- US-011 already passed; re-verified all 6 acceptance criteria against the implementation — still
+  green, no implementation change needed (drives the sync generator one .next() at a time, awaits
+  the injected Yield port between batches, discards the progress value, returns the terminal
+  GenerationResult verbatim; depends only on domain + ports). This pass adds 2 tests closing
+  implemented-but-unasserted gaps (9 -> 11 generate-walk tests, 234 -> 236 total).
+- Tests added (tests/generate-walk.test.ts), plus a new `countGeneratorYields(count, seed, config?)`
+  helper (drives the raw generator and counts its progress values):
+  - **exact yield count** — the use case must await the Yield port EXACTLY once per generator
+    progress value (between every .next(), never after the terminal done step). Prior tests only
+    asserted `>= 1` (success) and `>= 3` (failure). New test parametrises [10/4242, 90/4242, 40/999]
+    and asserts `counting.calls === countGeneratorYields(count, seed)` — expected computed from the
+    SAME generator, so it's self-consistent and seed-robust rather than pinned to a brittle constant
+    (each of these seeds happens to yield once). Also tightened the existing failure-path yield test
+    from `>= 3` to `=== countGeneratorYields(10, 7, EXHAUSTING_CONFIG)` (=3).
+  - **failure-path faithful driver** — `deepEqual(useCaseResult, directlyDrivenResult)` for
+    EXHAUSTING_CONFIG. The success path already had a faithful-driver test (proving the async wrapper
+    doesn't perturb the random stream); this mirrors it for the failure path, pinning the WHOLE
+    failure object is surfaced verbatim — reason, rerolls, and crucially `attempts` (=9 for this
+    config, which US-020 surfaces) — not merely that `ok === false`. The failure result is a plain
+    object ({ok,reason,attempts,rerolls}) so deepEqual on it is clean (no class instances).
+- Empirically probed before writing (dist/ probe): success 10/4242, 90/4242, 40/999 each yield once;
+  failure 10/7 EXHAUSTING_CONFIG yields 3 and returns {ok:false, reason:"Exhausted all re-rolls...",
+  attempts:9, rerolls:3}.
+- Files changed: tests/generate-walk.test.ts (+2 tests, +helper, +1 tightened assertion),
+  scripts/ralph/prd.json (US-011 notes), scripts/ralph/progress.txt (this entry).
+- Verified: `npm run clean` + `npm test` -> 236 pass, 0 fail; `npm run typecheck` clean.
+- **Learnings for future iterations:**
+  - When an async wrapper drives a synchronous generator, the precise contract is "yields == number
+    of generator progress values, strictly between .next() calls". Assert the EXACT count (compute it
+    by driving the raw generator in the test), not a loose `>= 1` — the loose bound passes even if the
+    wrapper yields after `done` or skips batches. Computing the expected from the same generator keeps
+    the test seed-robust (no magic constant to update when generation behaviour shifts).
+  - Add a faithful-driver test for BOTH the success and failure terminal states. The failure result
+    is a plain `{ok:false, reason, attempts, rerolls}` object, so a single `deepEqual` pins every
+    field (including `attempts`, which downstream US-020 surfaces) — much stronger than `ok === false`.
+---

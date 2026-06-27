@@ -49,6 +49,22 @@ function driveGeneratorDirectly(
   return step.value;
 }
 
+/** Count how many progress values the raw generator yields for a given seed/config. */
+function countGeneratorYields(
+  count: number,
+  seed: number,
+  config?: Partial<GeneratorConfig>
+): number {
+  const gen = walkGenerator.generate(count, new SeededRandom(seed), config);
+  let yields = 0;
+  let step = gen.next();
+  while (!step.done) {
+    yields++;
+    step = gen.next();
+  }
+  return yields;
+}
+
 const shape = (w: Walk) =>
   w.waypoints.map(p => [p.position.x, p.position.y, p.outboundTurn, p.wildcard]);
 
@@ -86,6 +102,19 @@ test("the use case is a faithful driver: same result as driving the generator di
   }
 });
 
+test("execute yields exactly once per generator progress value (between every .next())", async () => {
+  // Strictly stronger than ">= 1": the use case must await the Yield port exactly once between each
+  // pair of `.next()` calls — i.e. once per progress value the generator yields, no more, no fewer,
+  // and never after the terminal (done) step. Computing the expected count from the same generator
+  // keeps this self-consistent and seed-robust rather than pinned to a brittle constant.
+  for (const [count, seed] of [[10, 4242], [90, 4242], [40, 999]] as const) {
+    const counting = new CountingYield();
+    const useCase = new GenerateWalk(counting);
+    expectWalk(await useCase.execute(count, new SeededRandom(seed)));
+    assert.equal(counting.calls, countGeneratorYields(count, seed));
+  }
+});
+
 test("a fixed seed reproduces an identical Walk through the use case (determinism)", async () => {
   const useCase = new GenerateWalk(immediateYield);
   const a = expectWalk(await useCase.execute(40, new SeededRandom(999)));
@@ -110,11 +139,24 @@ test("execute surfaces the failure signal when the bounded re-rolls are exhauste
 test("execute yields between batches across multiple re-rolls on the failure path", async () => {
   // The failure path runs several re-rolls; the use case must await the Yield port on each so the
   // UI keeps breathing throughout a long, ultimately-failing generation rather than blocking once.
+  // Pin the EXACT count (once per generator progress value), not just ">= 3".
   const counting = new CountingYield();
   const useCase = new GenerateWalk(counting);
   const result = await useCase.execute(10, new SeededRandom(7), EXHAUSTING_CONFIG);
   assert.equal(result.ok, false);
   assert.ok(counting.calls >= 3, "expected at least one yield per re-roll on the failure path");
+  assert.equal(counting.calls, countGeneratorYields(10, 7, EXHAUSTING_CONFIG));
+});
+
+test("the use case surfaces the failure signal verbatim (faithful driver, failure path)", async () => {
+  // The success path already proves the async wrapper doesn't perturb the outcome; do the same for
+  // the failure path. deepEqual pins the WHOLE failure object — reason, rerolls, and crucially
+  // `attempts` (which US-020 surfaces) — is returned unchanged, not merely that `ok === false`.
+  const useCase = new GenerateWalk(immediateYield);
+  const viaUseCase = await useCase.execute(10, new SeededRandom(7), EXHAUSTING_CONFIG);
+  const direct = driveGeneratorDirectly(10, 7, EXHAUSTING_CONFIG);
+  assert.equal(viaUseCase.ok, false);
+  assert.deepEqual(viaUseCase, direct);
 });
 
 // ---- input-guard propagation ----
