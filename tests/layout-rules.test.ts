@@ -351,3 +351,88 @@ test("checkLayout: multiple violations reported together", () => {
   assert.ok(v.some(x => x.rule === "waypoint-circles-overlap"));
   assert.ok(v.some(x => x.rule === "waypoint-out-of-bounds"));
 });
+
+test("checkLayout: segment-through-waypoint-circle violation reported", () => {
+  // seg[0] horizontal at y=100 x:[100,300]; wp[2] at (200,120) → 20px from seg[0] < 25 (radius)
+  const bounds = new Bounds(0, 0, 500, 500);
+  const wps = [
+    mkWp(1, 3, 100, 100),
+    mkWp(2, 3, 300, 100, Turn.Left),
+    mkWp(3, 3, 200, 120),
+  ];
+  const segs = [mkSeg(100, 100, 300, 100), mkSeg(300, 100, 300, 300)];
+  const v = checkLayout(wps, segs, bounds);
+  assert.ok(v.some(x => x.rule === "segment-through-waypoint-circle"));
+});
+
+test("checkLayout: turn-label-too-close-to-segment violation reported", () => {
+  // wp[1] at (100,200): NE label ≈ (132.53, 167.47)
+  // seg[2] vertical at x=140, y:[160,180]: distance = |140-132.53| ≈ 7.47 < 8 → violation
+  const bounds = new Bounds(0, 0, 500, 500);
+  const wps = [
+    mkWp(1, 4, 0, 200),
+    mkWp(2, 4, 100, 200, Turn.Left),
+    mkWp(3, 4, 200, 200, Turn.Right),
+    mkWp(4, 4, 300, 200),
+  ];
+  const segs = [
+    mkSeg(0, 200, 100, 200),
+    mkSeg(100, 200, 200, 200),
+    mkSeg(140, 160, 140, 180),
+  ];
+  const v = checkLayout(wps, segs, bounds);
+  assert.ok(v.some(x => x.rule === "turn-label-too-close-to-segment"));
+});
+
+// ---- noCloseParallelSegments: co-linear edge cases ----
+
+test("noCloseParallelSegments: co-linear horizontal segments with range overlap fail (sep=0)", () => {
+  // Both at y=0; x ranges [0,100] and [50,150] overlap → separation=0 < 55
+  assert.equal(
+    noCloseParallelSegments([mkSeg(0, 0, 100, 0), mkSeg(50, 0, 150, 0)]),
+    false
+  );
+});
+
+test("noCloseParallelSegments: consecutive segments sharing only an endpoint pass (overlapLength=0)", () => {
+  // Both horizontal at y=0; x ranges [0,100] and [100,200] touch at one point → overlapLength=0
+  assert.equal(
+    noCloseParallelSegments([mkSeg(0, 0, 100, 0), mkSeg(100, 0, 200, 0)]),
+    true
+  );
+});
+
+// ---- turnLabelsClearOfNonAdjacentSegments: vertical non-adj segment ----
+
+test("turnLabelsClearOfNonAdjacentSegments: vertical non-adj segment within 8px fails", () => {
+  // wp[1] at (100,200): NE label ≈ (132.53, 167.47)
+  // seg[2] vertical at x=140 y:[160,180]: horiz dist = |140-132.53| ≈ 7.47 < 8 → fail
+  const wps = [
+    mkWp(1, 4, 0, 200),
+    mkWp(2, 4, 100, 200, Turn.Left),
+    mkWp(3, 4, 200, 200, Turn.Right),
+    mkWp(4, 4, 300, 200),
+  ];
+  const segs = [
+    mkSeg(0, 200, 100, 200),
+    mkSeg(100, 200, 200, 200),
+    mkSeg(140, 160, 140, 180),
+  ];
+  assert.equal(turnLabelsClearOfNonAdjacentSegments(wps, segs), false);
+});
+
+test("turnLabelsClearOfNonAdjacentSegments: vertical non-adj segment beyond 8px passes", () => {
+  // Same as above but seg[2] at x=141 → dist ≈ 8.47 > 8 → pass
+  const wps = [
+    mkWp(1, 4, 0, 200),
+    mkWp(2, 4, 100, 200, Turn.Left),
+    mkWp(3, 4, 200, 200, Turn.Right),
+    mkWp(4, 4, 300, 200),
+  ];
+  const segs = [
+    mkSeg(0, 200, 100, 200),
+    mkSeg(100, 200, 200, 200),
+    mkSeg(141, 160, 141, 180),
+  ];
+  assert.equal(turnLabelsClearOfNonAdjacentSegments(wps, segs), true);
+});
