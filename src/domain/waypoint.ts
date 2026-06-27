@@ -4,10 +4,27 @@ import { Turn } from "./turn.js";
 export class Waypoint {
   private constructor(
     readonly sequenceNumber: number,
+    readonly totalWaypoints: number,
     readonly position: Point,
     readonly outboundTurn: Turn | null,
     readonly wildcard: boolean
   ) {}
+
+  get isFirst(): boolean {
+    return this.sequenceNumber === 1;
+  }
+
+  get isLast(): boolean {
+    return this.sequenceNumber === this.totalWaypoints;
+  }
+
+  get isTerminal(): boolean {
+    return this.isFirst || this.isLast;
+  }
+
+  get isInterior(): boolean {
+    return !this.isTerminal;
+  }
 
   static create(
     sequenceNumber: number,
@@ -34,6 +51,6 @@ export class Waypoint {
     if (wildcard && outboundTurn !== null) {
       throw new Error("Wildcard waypoints must have no outbound turn (turn is skipped)");
     }
-    return new Waypoint(sequenceNumber, position, outboundTurn, wildcard);
+    return new Waypoint(sequenceNumber, totalWaypoints, position, outboundTurn, wildcard);
   }
 }

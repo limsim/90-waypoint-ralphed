@@ -152,3 +152,75 @@ test("totalWaypoints = 0 throws", () => {
     /totalWaypoints must be at least 2/
   );
 });
+
+test("totalWaypoints is accessible as a field", () => {
+  const wp = Waypoint.create(3, 10, origin, Turn.Left, false);
+  assert.equal(wp.totalWaypoints, 10);
+});
+
+test("isFirst is true for sequenceNumber 1", () => {
+  const wp = Waypoint.create(1, 10, origin, null, false);
+  assert.equal(wp.isFirst, true);
+});
+
+test("isFirst is false for interior waypoint", () => {
+  const wp = Waypoint.create(2, 10, pos(0, 100), Turn.Left, false);
+  assert.equal(wp.isFirst, false);
+});
+
+test("isLast is true for sequenceNumber === totalWaypoints", () => {
+  const wp = Waypoint.create(10, 10, pos(0, 500), null, false);
+  assert.equal(wp.isLast, true);
+});
+
+test("isLast is false for interior waypoint", () => {
+  const wp = Waypoint.create(9, 10, pos(0, 400), Turn.Right, false);
+  assert.equal(wp.isLast, false);
+});
+
+test("isTerminal is true for first waypoint", () => {
+  const wp = Waypoint.create(1, 5, origin, null, false);
+  assert.equal(wp.isTerminal, true);
+});
+
+test("isTerminal is true for last waypoint", () => {
+  const wp = Waypoint.create(5, 5, pos(0, 200), null, false);
+  assert.equal(wp.isTerminal, true);
+});
+
+test("isTerminal is false for interior waypoint", () => {
+  const wp = Waypoint.create(3, 5, pos(0, 100), Turn.Left, false);
+  assert.equal(wp.isTerminal, false);
+});
+
+test("isInterior is true for interior waypoint", () => {
+  const wp = Waypoint.create(3, 5, pos(0, 100), Turn.Right, false);
+  assert.equal(wp.isInterior, true);
+});
+
+test("isInterior is false for first waypoint", () => {
+  const wp = Waypoint.create(1, 5, origin, null, false);
+  assert.equal(wp.isInterior, false);
+});
+
+test("isInterior is false for last waypoint", () => {
+  const wp = Waypoint.create(5, 5, pos(0, 200), null, false);
+  assert.equal(wp.isInterior, false);
+});
+
+test("interior non-wildcard with no outbound turn is allowed", () => {
+  // Walk aggregate or generator may construct interior waypoints with null turn (e.g. before full placement)
+  const wp = Waypoint.create(3, 10, pos(100, 100), null, false);
+  assert.equal(wp.outboundTurn, null);
+  assert.equal(wp.wildcard, false);
+  assert.equal(wp.isInterior, true);
+});
+
+test("minimum walk: isFirst and isLast on 2-waypoint walk", () => {
+  const first = Waypoint.create(1, 2, origin, null, false);
+  const last = Waypoint.create(2, 2, pos(0, 100), null, false);
+  assert.equal(first.isFirst, true);
+  assert.equal(first.isLast, false);
+  assert.equal(last.isFirst, false);
+  assert.equal(last.isLast, true);
+});
