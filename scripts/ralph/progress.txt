@@ -80,6 +80,17 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   the use-case result equals the result of driving `walkGenerator.generate` synchronously for the
   SAME seed — the async wrapper must not perturb the random stream. A `function*` count guard fires
   on the first `.next()`, so `execute(badCount, ...)` REJECTS — assert via `assert.rejects`.
+- Counting awaits (microtask Yield double) and PROVING the event loop is freed are DIFFERENT contracts.
+  A `Promise.resolve()`/`async()=>{}` Yield is a MICROTASK and never cedes to the render/paint queue —
+  so it can't prove the "UI paints between batches" AC. For that, inject a MACROTASK Yield
+  (`() => new Promise(r => setImmediate(r))`), drive a path with >= 2 yields (e.g. EXHAUSTING_CONFIG's
+  3 re-rolls), and assert a caller-queued `setImmediate` fires BEFORE the use case's promise settles
+  (i.e. while a `finished` flag is still false). Deterministic: setImmediate is FIFO and microtasks
+  fully drain between macrotasks — no timers/sleeps, non-flaky. This catches "drain synchronously then
+  await once at the end" / "don't await at all" regressions that count-based tests pass through. The
+  SAME macrotask-Yield double is the headless stand-in for US-021's production Yield — whose
+  `yieldToEventLoop()` MUST be a macrotask (setImmediate / MessageChannel in the browser), never a
+  microtask (`queueMicrotask`/`Promise.resolve`), or paint is starved and the overlay never shows.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -779,3 +790,45 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     is a plain `{ok:false, reason, attempts, rerolls}` object, so a single `deepEqual` pins every
     field (including `attempts`, which downstream US-020 surfaces) — much stronger than `ok === false`.
 ---
+
+## 2026-06-28 - US-011 (GenerateWalk use case) — REFINEMENT
+- US-011 already passed; re-verified all 6 acceptance criteria against the implementation — still
+  green, no implementation change needed (drives the sync generator one .next() at a time, awaits the
+  injected Yield port between batches, discards the progress value, returns the terminal
+  GenerationResult verbatim; depends only on domain + ports — tsconfig.core has no DOM lib so a stray
+  DOM ref wouldn't compile). This pass adds 1 test closing the one AC clause every prior test left
+  untested (11 -> 12 generate-walk tests, 236 -> 237 total).
+- Gap closed: the AC's actual PURPOSE — "so the UI can paint during long generations" / "the overlay
+  spinner animates via CSS once the event loop is freed" / driving the iterator "awaiting ... between
+  batches". Every prior test used a MICROTASK Yield double (`Promise.resolve()` / `async () => calls++`)
+  and asserted only the COUNT of awaits or the result object; NONE proved the use case genuinely cedes
+  the event loop to the MACROTASK queue between generator steps (which is what a browser repaint needs —
+  paint happens on a macrotask/render tick, not a microtask). New test (tests/generate-walk.test.ts):
+  - **event-loop-freed-between-batches** — injects a real macrotask Yield
+    (`yieldToEventLoop: () => new Promise(r => setImmediate(r))`) and runs the 3-step EXHAUSTING_CONFIG
+    failure path. It kicks off `execute(...)` (without awaiting), attaches a `.then` that flips
+    `finished=true`, then queues an external `setImmediate` that records `interleavedWhileRunning` iff
+    `finished` is still false when it fires. Because the use case awaits a setImmediate between EACH of
+    the 3 generator yields, the caller's setImmediate (queued right after execute suspends on yield #1)
+    fires in a gap BETWEEN steps — while generation is still in flight. Asserts ok===false (the
+    multi-step path actually ran) and interleavedWhileRunning===true.
+- Determinism: setImmediate is strict FIFO and the microtask queue fully drains between macrotasks, so
+  the ordering (#Yield1 -> resume -> suspend on #Yield2; then caller's #B; then #Yield2 -> ...) is
+  fixed. Robust for any path with >= 2 yields; EXHAUSTING_CONFIG gives exactly 3.
+- Regression value: catches the two ways the loop could SILENTLY stop interleaving — "drain the
+  iterator synchronously then await once at the end" and "don't await at all" — both of which the
+  count-based tests pass straight through (a single end-yield still counts as >= 1, and a sync drain
+  still produces the right result object). With the new test, either makes the external macrotask fire
+  only AFTER `finished` is set, failing the assertion.
+- Files changed: tests/generate-walk.test.ts (+1 test), scripts/ralph/prd.json (US-011 notes),
+  scripts/ralph/progress.txt (this entry + a Codebase Pattern).
+- Verified: `npm run clean` + `npm run typecheck` clean; `npm test` -> 237 pass, 0 fail.
+- **Learnings for future iterations:**
+  - "Counting the awaits" (microtask Yield double) and "proving the event loop is freed" (macrotask
+    Yield double) are DIFFERENT contracts — a microtask `await` does NOT yield to the render/paint
+    queue. To test the latter deterministically, inject a `setImmediate`-based Yield, run a path with
+    >= 2 yields, and assert a caller-queued `setImmediate` fires before the use case's promise settles.
+    setImmediate FIFO + microtask-drain-between-macrotasks makes this non-flaky (no timers, no sleeps).
+  - This same macrotask-Yield double is the headless stand-in for US-021's production Yield (whose
+    `yieldToEventLoop()` must be a macrotask, e.g. setImmediate/MessageChannel, NOT `queueMicrotask`/
+    `Promise.resolve` — a microtask would starve paint and defeat the whole overlay design).

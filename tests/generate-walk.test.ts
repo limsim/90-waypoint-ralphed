@@ -159,6 +159,40 @@ test("the use case surfaces the failure signal verbatim (faithful driver, failur
   assert.deepEqual(viaUseCase, direct);
 });
 
+test("frees the event loop between batches: external macrotasks interleave with generation", async () => {
+  // The whole *point* of the use case is to drive the synchronous generator with an `await` BETWEEN
+  // every step so a real macrotask Yield genuinely cedes the event loop mid-generation — that is
+  // what lets the browser paint the overlay. The other tests use a microtask Yield and only count
+  // the awaits; none prove the loop is actually freed. Here the Yield resolves on a real macrotask
+  // (`setImmediate`), and a macrotask the caller queues right after `execute` suspends MUST run in
+  // one of the gaps between generator steps (the failure path has 3), i.e. while `finished` is still
+  // false. setImmediate is FIFO and microtasks drain between macrotasks, so this is deterministic.
+  const macrotaskYield: Yield = {
+    yieldToEventLoop: () => new Promise<void>(resolve => setImmediate(resolve)),
+  };
+  const useCase = new GenerateWalk(macrotaskYield);
+
+  let finished = false;
+  let interleavedWhileRunning = false;
+
+  const run = useCase
+    .execute(10, new SeededRandom(7), EXHAUSTING_CONFIG)
+    .then(result => {
+      finished = true;
+      return result;
+    });
+  setImmediate(() => {
+    if (!finished) interleavedWhileRunning = true;
+  });
+
+  const result = await run;
+  assert.equal(result.ok, false, "sanity: the multi-step failure path actually ran");
+  assert.ok(
+    interleavedWhileRunning,
+    "an external macrotask must run while generation is still in progress (event loop freed between batches)"
+  );
+});
+
 // ---- input-guard propagation ----
 
 test("execute rejects with RangeError for fewer than 2 waypoints", async () => {
