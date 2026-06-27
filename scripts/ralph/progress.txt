@@ -198,3 +198,19 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - Co-linear segments (same axis line, separation=0) must pass the layout-rule's "closer than 55px" check — separation=0 always violates it; ensure US-007 predicates treat co-linear segments as failing the spacing constraint.
   - `segment.start` and `segment.end` (readonly Point) are the canonical handles for US-007 and the renderer; the tests now confirm they are accessible.
 ---
+
+## 2026-06-27 - US-004 (Segment value object) — REFINEMENT
+- US-004 already passed; all 6 acceptance criteria verified green.
+- Refinement: added 4 tests to tests/segment.test.ts (29 → 33 Segment tests, 63 → 67 total):
+  - `distanceFrom` symmetry on vertical segments (mirrors existing horizontal symmetry test)
+  - `parallelOverlap` with reversed-direction segments (start.x > end.x) — exercises `Math.min/max` path
+  - Construction error for diagonal mentions 'diagonal' (asserts message text, not just that it throws)
+  - Construction error for zero-length mentions 'non-zero' (same)
+- Files changed: tests/segment.test.ts (4 tests added)
+- All 67 tests pass; typecheck clean.
+- **Learnings for future iterations:**
+  - `parallelOverlap` is direction-independent because it uses `Math.min/Math.max` on coordinates internally;
+    both forward and reversed segments produce the same result — confirmed by the new test.
+  - Asserting error message text (e.g. `/diagonal/i`) is strictly tighter than bare `assert.throws(fn)`;
+    prefer regex patterns on throw checks when the error message is part of the public contract.
+---
