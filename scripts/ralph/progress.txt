@@ -490,3 +490,16 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - Interleaving nextFloat and nextInt calls is deterministic because both go through the same internal `this.state` mutation; mixing them in tests exercises the real usage pattern of the walk-generator.
   - seed=0 is safe for mulberry32: the initial state advance (`+0x6d2b79f5`) makes state non-zero before the first output; no need to guard against zero seed in the constructor.
 ---
+
+## 2026-06-27 - US-009 (Driven ports and a seedable RandomSource) — REFINEMENT
+- US-009 already passed; all 5 acceptance criteria verified green.
+- Refinement: added 2 tests to tests/seeded-random.test.ts (13 → 15 SeededRandom tests, 197 → 199 total):
+  - **Non-integer seed coercion** — `SeededRandom(42.9)` produces the same stream as `SeededRandom(42)` because the constructor applies `>>> 0` (bitwise truncation). Critical contract for US-022: URL seeds parsed via `Number()` may be floats; this test pins the behaviour.
+  - **nextInt distribution uniformity** — 5000 draws of `nextInt(0, 4)` with seed=777; each bucket must land in [750, 1250] (±25% of expected 1000). Verifies the PRNG is not biased toward low or high values in the output range, which cannot be inferred from the bounds-only test alone.
+- Files changed:
+  - tests/seeded-random.test.ts (2 tests added)
+- All 199 tests pass; typecheck clean.
+- **Learnings for future iterations:**
+  - Non-integer seeds are silently truncated via `>>> 0` in the constructor — document this in the US-022 adapter as a postcondition when converting URL query parameters to seeds (`parseInt` is safer than `Number` since it always produces an integer, but both work via the `>>> 0` guard).
+  - Distribution tests (bucket-count over many draws) catch biases that bounds-only tests miss; use ±25% tolerance for mulberry32 over 5000 draws with a known seed — this seed (777) passes comfortably, validating the PRNG quality.
+---
