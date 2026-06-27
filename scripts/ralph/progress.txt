@@ -359,3 +359,31 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     position — tests can freely position waypoints and segments independently (the predicates use
     index-based adjacency, not geometric walk connectivity).
 ---
+
+## 2026-06-27 - US-007 (layout-rules pure constraint predicates) — REFINEMENT
+- US-007 already passed; all 9 acceptance criteria remain green.
+- Refinement: added 6 tests to tests/layout-rules.test.ts (35 → 41 layout-rules tests, 155 → 161 total):
+  - `noCloseParallelSegments`: co-linear horizontal segments with range overlap fail (sep=0 < 55) —
+    documents the important boundary case noted in the US-004 learnings.
+  - `noCloseParallelSegments`: consecutive segments sharing only an endpoint pass (overlapLength=0) —
+    confirms adjacent walk segments that touch at one point do NOT trigger the constraint.
+  - `turnLabelsClearOfNonAdjacentSegments`: vertical non-adj segment within 8px fails — prior tests only
+    used horizontal non-adjacent segments; this exercises the perpendicular-distance path for vertical segs.
+  - `turnLabelsClearOfNonAdjacentSegments`: vertical non-adj segment beyond 8px passes — boundary pair.
+  - `checkLayout`: segment-through-waypoint-circle violation reported — previously no checkLayout test
+    exercised this specific rule name; now covers all 6 constraint rules in the composite.
+  - `checkLayout`: turn-label-too-close-to-segment violation reported — same gap; now all rules verified
+    in the composite function.
+- Files changed: tests/layout-rules.test.ts (6 tests added)
+- All 161 tests pass; typecheck clean.
+- **Learnings for future iterations:**
+  - `noCloseParallelSegments` requires BOTH `overlapLength > 0` AND `separation < 55`. Co-linear
+    segments (sep=0) always violate when their ranges overlap, but consecutive walk segments that share
+    only an endpoint have overlapLength=0 and do NOT violate — this is the expected behaviour for a walk.
+  - All 6 layout-rule names are now exercised in checkLayout tests: waypoint-circles-overlap,
+    parallel-segments-too-close, segment-too-close-to-waypoint, segment-through-waypoint-circle,
+    turn-label-too-close-to-segment, waypoint-out-of-bounds.
+  - The turn-label NE direction dy is negative (y increases downward in screen coords): label at
+    (cx+32.527, cy-32.527). A vertical segment at x=140 is 7.47px from a label at x≈132.53 (< 8 → fail);
+    at x=141 it is 8.47px (> 8 → pass). Use this geometry for future NE-label test fixtures.
+---
