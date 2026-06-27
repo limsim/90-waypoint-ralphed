@@ -257,3 +257,21 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - The N=2 empty-sequence `get(0)` case is the sharpest test for the `index >= length` guard (0 >= 0 is not obvious at a glance); worth adding for any bounded-index accessor.
   - Exact sequence shape tests (specific input → specific output array) are stronger than determinism tests alone; add them when the mapping logic is non-trivial.
 ---
+
+## 2026-06-27 - US-006 (Waypoint entity)
+- Implemented the Waypoint entity in src/domain/waypoint.ts
+  - `Waypoint.create(sequenceNumber, totalWaypoints, position, outboundTurn, wildcard)` — single validated factory
+  - Terminal waypoints (seq 1 and N): enforced to have `outboundTurn === null` and `wildcard === false`
+  - Interior waypoints (2..N-1): can have any `outboundTurn` (Turn | null) and `wildcard: boolean`
+  - Wildcard semantics: `wildcard=true` with `outboundTurn=null` (the turn from the sequence is skipped, heading unchanged)
+  - RangeError thrown for sequenceNumber out of [1..totalWaypoints] and for totalWaypoints < 2
+  - All four fields exposed as readonly: sequenceNumber, position, outboundTurn, wildcard
+- Files changed:
+  - src/domain/waypoint.ts (new — Waypoint entity)
+  - tests/waypoint.test.ts (new — 19 tests)
+- All 103 tests pass (84 prior + 19 new); typecheck clean.
+- **Learnings for future iterations:**
+  - Wildcard waypoints store `outboundTurn: null` (the turn is skipped/not applied); the `wildcard` flag marks them. The turn sequence for the walk still has a value at that index but the walk generator discards it.
+  - The single `create()` factory takes `totalWaypoints` so it can enforce the terminal/interior distinction. Two-factory alternatives (createTerminal/createInterior) are cleaner to call but make the "wildcards confined to 2..N-1" invariant harder to test in isolation.
+  - Interior waypoints with `outboundTurn=null` and `wildcard=false` are not explicitly prevented — they are the last waypoint pattern. Only the combination of `wildcard=true` on a terminal is rejected.
+---
