@@ -21,6 +21,9 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   Use plain `rm -rf dist`.
 - Layering enforced by project-reference tsconfigs: `core` (domain+application, NO DOM lib) <- `adapters`
   (+DOM, includes src/main.ts) and `test` (+node types). Relative imports need a `.js` extension.
+- layout-rules adjacency model: `segments[i]` (0-indexed) is adjacent to `waypoints[i]` and
+  `waypoints[i+1]`. Everything else is "non-adjacent". US-008 (Walk) and US-010 (generator) must use
+  this same index convention when calling the layout-rule predicates.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -322,4 +325,37 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     external count. Prefer these over comparing `sequenceNumber` directly.
   - `isInterior` is the logical inverse of `isTerminal`; use it to filter the waypoints that carry
     a meaningful `outboundTurn` or wildcard flag.
+---
+
+## 2026-06-27 - US-007 (layout-rules pure constraint predicates)
+- Implemented `src/domain/layout-rules.ts`: six pure boolean predicate functions plus a composite
+  `checkLayout` function returning a `LayoutViolation[]` list:
+  - `noWaypointCirclesOverlap(waypoints)` — distance < 2*25px = fail
+  - `noCloseParallelSegments(segments)` — parallel + overlapping range + separation < 55px = fail
+  - `noSegmentCloseToNonAdjacentWaypoint(waypoints, segments)` — segment < 35px from non-adj centre = fail
+  - `noSegmentThroughNonAdjacentWaypointCircle(waypoints, segments)` — segment < 25px from non-adj centre = fail
+  - `turnLabelsClearOfNonAdjacentSegments(waypoints, segments)` — NE label (46px at 45°) < 8px from non-adj segment = fail
+  - `allWaypointsWithinBounds(waypoints, bounds)` — uses `Bounds.contains(pos, 30)`
+  - Exported constants: WAYPOINT_RADIUS=25, MIN_PARALLEL_SEPARATION=55, MIN_SEGMENT_WAYPOINT_CLEARANCE=35,
+    TURN_LABEL_OFFSET=46, TURN_LABEL_CLEARANCE=8, BOUNDS_PADDING=30
+  - `LayoutViolation { rule: string }` interface + `checkLayout(waypoints, segments, bounds)` composite
+- Implemented `tests/layout-rules.test.ts`: 35 tests; positive/negative and boundary cases for all 6 constraints
+- All 155 tests pass; typecheck clean
+- Files changed:
+  - src/domain/layout-rules.ts (new)
+  - tests/layout-rules.test.ts (new)
+- **Learnings for future iterations:**
+  - Adjacency model: `segments[i]` (0-indexed) is adjacent to `waypoints[i]` and `waypoints[i+1]`.
+    All other waypoint indices are "non-adjacent" for segment-proximity checks. US-008 (Walk aggregate)
+    and US-010 (walk-generator) should use the same model when indexing.
+  - NE label position: `(cx + 46*cos(45°), cy - 46*sin(45°))` in screen coords (y increases down).
+    That is `dx = 46/√2 ≈ 32.527`, `dy = -32.527`. The minus sign on dy is critical.
+  - `noCloseParallelSegments` only triggers when `overlapLength > 0`; parallel segments whose
+    projected ranges do NOT overlap are exempt regardless of separation distance.
+  - `noSegmentThroughNonAdjacentWaypointCircle` (25px threshold) is strictly subsumed by
+    `noSegmentCloseToNonAdjacentWaypoint` (35px threshold), but both predicates exist as separate
+    checks as specified; the composite `checkLayout` may report both.
+  - Test fixtures: `Waypoint.create()` validates sequenceNumber/totalWaypoints/turn/wildcard but NOT
+    position — tests can freely position waypoints and segments independently (the predicates use
+    index-based adjacency, not geometric walk connectivity).
 ---
