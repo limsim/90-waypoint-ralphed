@@ -203,3 +203,29 @@ test("Segment: distanceFrom is identical on both sides of a horizontal segment",
   const s = new Segment(new Point(0, 0), new Point(100, 0));
   assert.strictEqual(s.distanceFrom(new Point(50, 25)), s.distanceFrom(new Point(50, -25)));
 });
+
+test("Segment: distanceFrom is identical on both sides of a vertical segment", () => {
+  const s = new Segment(new Point(0, 0), new Point(0, 100));
+  assert.strictEqual(s.distanceFrom(new Point(25, 50)), s.distanceFrom(new Point(-25, 50)));
+});
+
+// parallelOverlap — direction-independence (start > end)
+
+test("Segment: parallelOverlap handles reversed-direction horizontal segments", () => {
+  const s1 = new Segment(new Point(100, 0), new Point(0, 0));
+  const s2 = new Segment(new Point(150, 40), new Point(50, 40));
+  const r = s1.parallelOverlap(s2);
+  assert.ok(r !== null);
+  assert.strictEqual(r.separation, 40);
+  assert.strictEqual(r.overlapLength, 50);
+});
+
+// Construction error messages
+
+test("Segment: diagonal construction error mentions 'diagonal'", () => {
+  assert.throws(() => new Segment(new Point(0, 0), new Point(3, 4)), /diagonal/i);
+});
+
+test("Segment: zero-length construction error mentions 'non-zero'", () => {
+  assert.throws(() => new Segment(new Point(5, 5), new Point(5, 5)), /non-zero/i);
+});
