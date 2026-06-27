@@ -1,0 +1,364 @@
+{
+  "project": "90 Waypoint Map",
+  "branchName": "ralph/90-waypoint-map",
+  "description": "Generate and draw randomised orthogonal 'walks' in the style of Marcus John Henry Brown's 90 Waypoint Walk as a vanilla-TypeScript Canvas app. A fresh reinterpretation each generation (random turn sequence, segment lengths, wildcards), rendered as a clean orthogonal map capped to a single A4 page. Built with DDD + hexagonal architecture (pure, headless-testable domain core) per docs/adr/0001-0006.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Scaffold the project (build, test, dev, serve)",
+      "description": "As a developer, I need a TypeScript project skeleton with build and test tooling so subsequent stories have somewhere to land and a way to be verified.",
+      "acceptanceCriteria": [
+        "package.json has no runtime dependencies; dev deps limited to TypeScript and the node:test runner",
+        "tsconfig.json compiles to ES modules with strict enabled; domain/ and application/ do NOT include the 'dom' lib",
+        "Directory layout created: src/domain/, src/application/, src/adapters/, src/main.ts, and a tests location",
+        "npm scripts work: build (tsc), test (headless node:test), dev (watch), serve (Node static server on port 8000, auto-incrementing to the next free port if taken)",
+        "index.html loads the compiled entry via <script type=\"module\">",
+        "npm run build and npm test both succeed against a trivial placeholder test",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Point and Bounds value objects",
+      "description": "As a developer, I need immutable geometry primitives so the domain can reason about coordinates and the generation-space bounding box.",
+      "acceptanceCriteria": [
+        "Point is immutable (x, y) and supports equality and translation",
+        "Bounds is a generation-space rectangle supporting contains(point) with a padding inset and grow(factor)",
+        "No DOM/Canvas references",
+        "Unit tests cover equality, containment with padding, and growth",
+        "Tests pass (npm test)",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Heading and Turn value objects",
+      "description": "As a developer, I need direction primitives so the generator can apply turns and walk in a heading.",
+      "acceptanceCriteria": [
+        "Heading enumerates North/East/South/West; North points up (decreasing y)",
+        "Turn enumerates Left (L) and Right (R)",
+        "Applying L rotates the heading 90 degrees counter-clockwise; R rotates 90 degrees clockwise",
+        "Heading exposes its unit step vector",
+        "Unit tests verify all four headings x both turns and the unit vectors",
+        "Tests pass (npm test)",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Segment value object",
+      "description": "As a developer, I need a straight orthogonal segment with the geometry queries the layout rules depend on.",
+      "acceptanceCriteria": [
+        "Segment joins two Points and is always purely horizontal or vertical (construction rejects diagonals)",
+        "Exposes length, orientation (horizontal/vertical), distance-from-a-point, and a parallel-overlap query (overlapping range + separation distance)",
+        "No DOM/Canvas references",
+        "Unit tests cover length, orientation, point-distance, and parallel overlap/separation",
+        "Tests pass (npm test)",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "TurnSequence value object",
+      "description": "As a developer, I need the ordered L/R sequence that defines a walk's shape, randomisable per generation.",
+      "acceptanceCriteria": [
+        "TurnSequence is an immutable ordered list of Turn values",
+        "For a walk of N waypoints the sequence has exactly N-2 turns",
+        "A factory generates a random sequence of a given length from an injected RandomSource (may be stubbed in tests)",
+        "Unit tests verify length math for N=10 and N=90 and deterministic output under a seeded source",
+        "Tests pass (npm test)",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Waypoint entity",
+      "description": "As a developer, I need the waypoint entity carrying its sequence number, position, outbound turn, and wildcard state.",
+      "acceptanceCriteria": [
+        "Waypoint has a sequence number, a Point position, an outbound turn (L/R or none), and a wildcard flag",
+        "The first and last waypoints have no outbound turn and are never wildcards",
+        "A wildcard waypoint models heading-unchanged (turn-skipped) semantics",
+        "Unit tests cover first/last having no turn, the wildcard flag, and wildcards confined to waypoints 2..N-1",
+        "Tests pass (npm test)",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "layout-rules pure constraint predicates",
+      "description": "As a developer, I need the full set of spacing/overlap constraints as pure predicates so both the generator's hot loop and the Walk invariant can share them.",
+      "acceptanceCriteria": [
+        "Pure functions (no exceptions) returning booleans / violation lists for: no two waypoint circles (radius 25px) overlap",
+        "No two parallel segments with overlapping range are closer than 55px",
+        "No path segment passes closer than 35px from any non-adjacent waypoint centre",
+        "No segment passes through a non-adjacent waypoint circle",
+        "Every turn label's fixed NE (45 degrees), 46px-from-centre position has at least 8px clearance from non-adjacent segments",
+        "All waypoints lie within bounds (30px padding from edges)",
+        "No DOM/Canvas references",
+        "Unit tests include positive and negative cases for each constraint, including boundary distances (e.g. 55px vs 54px)",
+        "Tests pass (npm test)",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Walk always-valid aggregate root",
+      "description": "As a developer, I need a Walk that cannot exist in an invalid state, so no caller has to remember to validate it (docs/adr/0004).",
+      "acceptanceCriteria": [
+        "Walk.create(...) composes the layout-rules predicates into an invariant and throws on any violation; there is no isValid() method",
+        "A valid Walk exposes its waypoints, segments, generation-space bounding box, and cumulative distance from the start per waypoint",
+        "The aggregate is built from a finished placement, not incrementally (no draft Walk)",
+        "Unit tests: a known-good layout constructs; layouts violating each invariant throw",
+        "Tests pass (npm test)",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Driven ports and a seedable RandomSource",
+      "description": "As a developer, I need the two real boundaries (randomness, rendering) plus a cooperative-yield boundary inverted as ports, with a deterministic random source for tests (docs/adr/0003, 0006).",
+      "acceptanceCriteria": [
+        "Port interfaces defined in the domain/application layer: RandomSource (e.g. nextInt, nextFloat), Renderer (draw a Walk with display options), and a Yield port exposing a single yieldToEventLoop() method",
+        "A seedable RandomSource implementation produces a deterministic stream from a given seed; the same implementation serves both tests (fixed seed) and production (entropy by default, or a URL-supplied seed per US-022)",
+        "No DOM/Canvas types in the port definitions",
+        "Unit tests verify the seeded source is reproducible and the range helpers are correct",
+        "Tests pass (npm test)",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "walk-generator domain service (bounded generation, lookahead, re-roll)",
+      "description": "As a developer, I need the core generator that places a random turn sequence under the layout constraints and is guaranteed to terminate (docs/adr/0002, 0004, 0006).",
+      "acceptanceCriteria": [
+        "walkGenerator.generate(count, randomSource) is a pure synchronous generator function (function*) that yields a small progress value roughly every batch (~50 attempts, or once per re-roll) and returns either a valid Walk or a failure signal",
+        "Works on a lightweight mutable placement buffer; wraps the finished placement into Walk.create(...) at the end (never builds a draft Walk)",
+        "Walk shape: starts facing North; segment 1->2 points straight North (no turn at waypoint 1); leaving waypoint k (k=2..N-1) applies sequence[k-2] then travels to k+1; exactly N-2 turns",
+        "Segment length randomised per segment between 60px and 140px, scalable up to 8x to satisfy spacing",
+        "Wildcards: max(1, round(count/9)) per walk, randomised positions among waypoints 2..N-1; a wildcard skips that waypoint's turn (heading unchanged)",
+        "Only the intended turn is attempted - no opposite-turn / straight / 180-degree fallback",
+        "Lookahead: before committing a position for waypoint i, verify a valid position remains for i+1 (and i+2); skip dead-end candidates",
+        "Bounded control flow: 200 placement attempts per size -> grow bounds 10% up to ~10 times -> re-randomise the whole turn sequence up to ~20 times -> return failure signal; termination is guaranteed",
+        "Headless tests with a seeded RandomSource verify: generation terminates; produced walks are valid across counts including 10 and 90; the failure signal is reachable; output is deterministic for a fixed seed",
+        "Tests pass (npm test)",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "GenerateWalk use case",
+      "description": "As a user action handler, I need a use case that drives the generator iterator and cooperatively yields so the UI can paint during long generations.",
+      "acceptanceCriteria": [
+        "GenerateWalk depends only on domain + ports; it drives the walk-generator iterator to completion, awaiting the injected Yield port's yieldToEventLoop() between batches",
+        "It ignores the generator's yielded progress value (the overlay spinner animates via CSS once the event loop is freed)",
+        "Returns the valid Walk on success, or surfaces the failure signal for the caller to render an error",
+        "Headless tests use an immediate/no-op Yield port and a seeded RandomSource; assert success returns a valid walk and the exhausted-re-roll path surfaces failure",
+        "Tests pass (npm test)",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "ClearWalk use case",
+      "description": "As a user action handler, I need a use case that clears the current walk.",
+      "acceptanceCriteria": [
+        "ClearWalk resets the current-walk state to empty; depends only on domain + ports",
+        "Headless test asserts state is empty after clear",
+        "Tests pass (npm test)",
+        "Typecheck passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Canvas renderer - grid, segments, waypoints",
+      "description": "As a user, I want to see the walk drawn on the canvas so the generated route is visible.",
+      "acceptanceCriteria": [
+        "Implements the Renderer port using the Canvas 2D API; DOM/Canvas usage confined to src/adapters/canvas-renderer.ts",
+        "Draws a subtle light-grey grid, 60px cells, covering the waypoints' bounding box with 100px padding on each side",
+        "Draws orthogonal path lines (no diagonals, no mid-segment corners), dark grey/black, 2px weight",
+        "Draws each waypoint as a radius-25px circle with number centred in bold Arial 20px: waypoint 1 and the last waypoint are black fill / white border / white number; all others white fill / black border / black number",
+        "Typecheck passes",
+        "Capture a screenshot via browser automation showing a generated walk with grid, connected orthogonal segments, and correctly styled numbered waypoints, as evidence for human sign-off"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Canvas renderer - turn labels and wildcard rings",
+      "description": "As a user, I want to see each waypoint's outbound turn and which waypoints are wildcards.",
+      "acceptanceCriteria": [
+        "Outbound turn label (L, R, or W for wildcard) drawn at the fixed NE (45 degrees) position, 46px from the waypoint centre; first and last waypoints show no label",
+        "Wildcard waypoints show an orange ring, 3px stroke, at radius 30px outside the centre",
+        "Rendering honours the Show Turns and Show/Hide Wildcards display options independently (W label governed by Show Turns, ring by Show Wildcards)",
+        "Typecheck passes",
+        "Capture screenshots via browser automation showing labels clear of segments at NE, wildcard rings present, and the two toggles acting independently, as evidence for human sign-off"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "A4 cap, uniform downscale, auto-centre, viewport fit",
+      "description": "As a user, I want the map to always fit on one A4 page and on my screen, with the full walk centred (docs/adr/0005).",
+      "acceptanceCriteria": [
+        "The rendered canvas is capped at A4 (794x1123px at 96 PPI)",
+        "The waypoints' bounding box (+100px padding) is uniformly scaled down to fit A4 when it exceeds those dimensions; walks already within A4 are not scaled up",
+        "The walk auto-centres after generation so the full route is visible",
+        "If the canvas is wider than the viewport, it CSS-scales down (preserving aspect ratio) so there is no horizontal scrolling",
+        "Scaling/fit are adapter-only transforms; the domain's generation-space coordinates are untouched",
+        "Typecheck passes",
+        "Capture screenshots via browser automation showing a 90-waypoint walk fitting within A4 and the viewport, a small walk not enlarged, and both centred, as evidence for human sign-off"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "DOM controls driving adapter",
+      "description": "As a user, I want the control surface (Generate, Clear, Waypoints, toggles, Print) so I can drive the app.",
+      "acceptanceCriteria": [
+        "DOM usage confined to src/adapters/dom-controls.ts; it wires the GenerateWalk and ClearWalk use cases",
+        "Generate Walk: clears the canvas and draws a freshly randomised walk; during generation the button is disabled and a loading overlay (spinner + 'Generating...') is shown over the canvas; both are restored in a finally when generation completes",
+        "Clear: removes all waypoints and lines from the canvas",
+        "Waypoints: number input, range 10-90, default 90; sets the count for the next generation",
+        "Show/Hide Wildcards: toggles the orange rings only; rings visible by default",
+        "Show Turns: toggles the L/R/W labels (first/last show none); visible by default",
+        "Print: opens the browser print dialog",
+        "Typecheck passes",
+        "Capture screenshots via browser automation showing every control behaving as specified, including the overlay during generation and the toggles updating the render, as evidence for human sign-off"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-017",
+      "title": "Waypoint click tooltip and hover highlighting",
+      "description": "As a user, I want to click a waypoint for its details and get hover feedback so I can inspect the walk.",
+      "acceptanceCriteria": [
+        "Clicking a waypoint shows a DOM-overlay tooltip (not painted on canvas) with: waypoint number, turn direction (L / R / Wildcard), and cumulative distance from the start in generation-space px (stable across resizes)",
+        "Tooltip dismisses on Clear, on Generate, and on a click on empty canvas; it survives redraws",
+        "Hit-testing inverts both transforms (viewport -> A4 -> generation) to map the click to a waypoint",
+        "Hover over a waypoint: cursor becomes a pointer, the waypoint gains a drop shadow, and its connecting segments thicken to 4px; moving off the canvas removes all hover highlighting",
+        "Typecheck passes",
+        "Capture screenshots via browser automation showing a correct tooltip on click, the tooltip surviving a window resize and dismissing on the specified actions, and hover effects engaging and clearing on exit, as evidence for human sign-off"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-018",
+      "title": "Legend (DOM/HTML)",
+      "description": "As a user, I want a legend explaining the symbols.",
+      "acceptanceCriteria": [
+        "A legend rendered as DOM/HTML (not canvas-painted) below the canvas, with three entries: Start / End (black filled circle), Waypoint (white filled circle, black border), Wildcard (orange ring - walker goes straight)",
+        "Typecheck passes",
+        "Capture a screenshot via browser automation showing the legend below the canvas with the three correct entries, as evidence for human sign-off"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-019",
+      "title": "Print stylesheet (single A4 page)",
+      "description": "As a user, I want to print just the map and legend cleanly.",
+      "acceptanceCriteria": [
+        "A print stylesheet prints the canvas and legend on a single A4 page with all other UI chrome hidden",
+        "Typecheck passes",
+        "Capture a print-preview screenshot via browser automation showing only the map + legend on one A4 page, as evidence for human sign-off"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-020",
+      "title": "Graceful generation-failure error",
+      "description": "As a user, if generation can't find a valid walk, I want a clear message rather than a hang.",
+      "acceptanceCriteria": [
+        "When GenerateWalk surfaces the exhausted-re-roll failure signal, an error is shown over the canvas: 'Couldn't generate a walk - try again or reduce the waypoint count', and the controls are restored",
+        "The UI never hangs: this path is reached via the bounded generator, not an infinite loop",
+        "Typecheck passes",
+        "Capture a screenshot via browser automation (forcing or simulating the failure path) showing the error overlay and re-enabled controls, as evidence for human sign-off"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-021",
+      "title": "Composition root (main.ts) and auto-generate on load",
+      "description": "As a user, I want the app fully wired and showing a walk the moment the page loads.",
+      "acceptanceCriteria": [
+        "src/main.ts is the composition root: it instantiates the domain/application layers and the adapters (canvas renderer, DOM controls), injects the production RandomSource (entropy-seeded by default; the ?seed= URL override is layered on in US-022) and a Yield port whose yieldToEventLoop() is a macrotask in production",
+        "A walk is automatically generated on first page load, so the canvas is never blank",
+        "npm run build typecheck passes; npm test still passes (no regressions)",
+        "Typecheck passes",
+        "Capture a screenshot via browser automation showing the page (served via npm run serve) with an auto-generated walk on load and all controls working end-to-end, as evidence for human sign-off"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-022",
+      "title": "Shareable reproducible walks via ?seed= URL",
+      "description": "As a user, I want a URL that reproduces the exact walk I'm looking at so I can share or revisit a specific generation.",
+      "acceptanceCriteria": [
+        "On load, if the URL has a ?seed= parameter (and optional waypoint count), the production RandomSource is seeded with it so the identical walk is regenerated; with no seed param, behaviour is unchanged (entropy-seeded fresh walk)",
+        "After each Generate Walk, the URL is updated (without reloading) to reflect the seed and waypoint count that produced the current walk",
+        "The seed used for a generation is recoverable - opening the reflected URL reproduces the same waypoints, turns, segment lengths, and wildcards",
+        "URL read/write lives in the adapter/composition layer only; the domain stays seed-agnostic",
+        "A headless test confirms the same seed yields an identical Walk (determinism)",
+        "Tests pass (npm test)",
+        "Typecheck passes",
+        "Capture screenshots via browser automation showing two loads of the same ?seed= URL produce visually identical walks and the URL updating after a fresh Generate, as evidence for human sign-off"
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
