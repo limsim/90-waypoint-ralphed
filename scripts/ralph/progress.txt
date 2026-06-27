@@ -21,6 +21,8 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   Use plain `rm -rf dist`.
 - Layering enforced by project-reference tsconfigs: `core` (domain+application, NO DOM lib) <- `adapters`
   (+DOM, includes src/main.ts) and `test` (+node types). Relative imports need a `.js` extension.
+- `SeededRandom` (PRNG implementation) lives in `src/domain/` not adapters — `tsconfig.test.json` only references core (domain+application), so tests can't import from adapters. Any pure implementation needed in tests must be in domain/ or application/.
+- Expanding `RandomSource` interface: search for `{ nextFloat:` stubs across tests/ whenever adding a new method — each stub must implement the full interface or tsc fails.
 - layout-rules adjacency model: `segments[i]` (0-indexed) is adjacent to `waypoints[i]` and
   `waypoints[i+1]`. Everything else is "non-adjacent". US-008 (Walk) and US-010 (generator) must use
   this same index convention when calling the layout-rule predicates.
@@ -447,4 +449,28 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     rather than expecting it alone.
   - layout-rules predicates want mutable `Waypoint[]`/`Segment[]`; spread-copy a `ReadonlyArray` before
     calling them (the aggregate stores ReadonlyArray for immutability but passes `[...waypoints]` to checks).
+---
+
+## 2026-06-27 - US-009 (Driven ports and a seedable RandomSource)
+- What was implemented:
+  - `src/domain/random-source.ts`: expanded `RandomSource` interface to include `nextInt(minInclusive, maxInclusive): number` alongside the existing `nextFloat(): number`.
+  - `src/domain/seeded-random.ts`: `SeededRandom implements RandomSource` using the mulberry32 PRNG algorithm. Constructor takes an optional seed (entropy-derived via `Date.now() ^ Math.random()` when omitted). Lives in domain/ (pure math, no DOM/Node deps) so tests can import it directly via the core tsconfig.
+  - `src/application/renderer-port.ts`: `Renderer` driven port (draw(walk, displayOptions) + clear()) and `DisplayOptions { showWildcards, showTurns }`. No DOM/Canvas types.
+  - `src/application/yield-port.ts`: `Yield` driven port exposing `yieldToEventLoop(): Promise<void>`.
+  - `tests/seeded-random.test.ts`: 9 tests — same-seed reproducibility (nextFloat + nextInt), different seeds give different sequences, [0,1) range for nextFloat, [min,max] inclusive range for nextInt, min===max, both endpoints reachable over many draws, entropy-seeded validity, structural interface check.
+  - `tests/turn-sequence.test.ts`: `stubSource` updated to implement `nextInt` (was only `nextFloat`); TurnSequence.generate only calls `nextFloat` so the stub's `nextInt` is never invoked, but tsc requires the full interface.
+- Files changed:
+  - src/domain/random-source.ts (interface expanded)
+  - src/domain/seeded-random.ts (new)
+  - src/application/renderer-port.ts (new)
+  - src/application/yield-port.ts (new)
+  - tests/seeded-random.test.ts (new)
+  - tests/turn-sequence.test.ts (stub updated)
+  - scripts/ralph/prd.json (US-009 passes:true + notes)
+- All 193 tests pass; typecheck clean.
+- **Learnings for future iterations:**
+  - `SeededRandom` lives in `src/domain/` (not adapters) because the test tsconfig (`tsconfig.test.json`) only references `tsconfig.core.json` (domain+application). Putting the implementation in adapters would make it unreachable from tests.
+  - mulberry32 never returns exactly 1.0 (max output is 0xFFFFFFFF / 0x100000000 ≈ 0.9999999997), so `nextInt` using `Math.floor(nextFloat() * (max-min+1))` is safe — no off-by-one at the top end.
+  - Adding `nextInt` to the `RandomSource` interface requires updating all existing stubs — search for `{ nextFloat:` when extending the interface to catch them all. Currently only `turn-sequence.test.ts` had a stub.
+  - Port interfaces (`Renderer`, `Yield`) belong in `src/application/` — they define contracts the application layer uses; the domain layer owns `RandomSource` since it's consumed by domain services (TurnSequence, walk-generator).
 ---

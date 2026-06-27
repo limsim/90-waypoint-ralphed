@@ -150,8 +150,8 @@
         "Typecheck passes"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "src/domain/random-source.ts: expanded interface with nextInt(min,max). src/domain/seeded-random.ts: SeededRandom class (mulberry32 PRNG) implements RandomSource — same class for tests (fixed seed) and production (entropy-seeded default). src/application/renderer-port.ts: Renderer port (draw/clear, DisplayOptions) + src/application/yield-port.ts: Yield port (yieldToEventLoop). No DOM/Canvas in any port. tests/seeded-random.test.ts: 9 tests covering reproducibility, [0,1) range, nextInt bounds, coverage of endpoints. tests/turn-sequence.test.ts: stubSource updated to also implement nextInt (TurnSequence only calls nextFloat, stub satisfies the expanded interface). 193 tests total pass."
     },
     {
       "id": "US-010",

@@ -6,7 +6,10 @@ import { RandomSource } from "../src/domain/random-source.js";
 
 function stubSource(values: number[]): RandomSource {
   let i = 0;
-  return { nextFloat: () => values[i++ % values.length] };
+  return {
+    nextFloat: () => values[i++ % values.length],
+    nextInt: (min, max) => min + Math.floor(values[i++ % values.length] * (max - min + 1)),
+  };
 }
 
 test("length for N=10 is exactly 8", () => {
