@@ -387,3 +387,20 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     (cx+32.527, cy-32.527). A vertical segment at x=140 is 7.47px from a label at x≈132.53 (< 8 → fail);
     at x=141 it is 8.47px (> 8 → pass). Use this geometry for future NE-label test fixtures.
 ---
+
+## 2026-06-27 - US-007 (layout-rules pure constraint predicates) — REFINEMENT
+- US-007 already passed; all 9 acceptance criteria remain green.
+- Refinement: added 6 edge-case tests to tests/layout-rules.test.ts (41 → 47 layout-rules tests, 161 → 167 total):
+  - `noWaypointCirclesOverlap: diagonal 3-4-5 distance exactly 50px passes` — prior boundary tests used only horizontal/vertical separation; this exercises the `Math.hypot` path with a diagonal case at the exact threshold (30,40 → hypot=50, not < 50 → pass).
+  - `noWaypointCirclesOverlap: diagonal 3-4-5 distance 49px fails` — complementary fail case (30,39 → hypot≈49.24 < 50 → fail).
+  - `noSegmentCloseToNonAdjacentWaypoint: 4-waypoint middle segment non-adjacent outer waypoint fails` — prior tests only used 3-waypoint fixtures; this verifies the adjacency model for a 4-waypoint L-shaped walk where seg[1] is non-adjacent to both wp[0] and wp[3], and wp[3] at 34px clearance triggers a violation.
+  - `allWaypointsWithinBounds: empty waypoints list passes` — vacuous-truth edge case; `Array.every` on empty returns true.
+  - `turnLabelsClearOfNonAdjacentSegments: wildcard interior waypoint label still checked` — wildcard waypoints are interior (not terminal), so `isTerminal` is false and their NE label clearance is still enforced; confirms wildcard status does not exempt a waypoint from this constraint.
+  - `checkLayout: empty waypoints and segments returns no violations` — minimal valid input edge case; the composite correctly returns an empty violation list for empty arrays.
+- Files changed: tests/layout-rules.test.ts (6 tests added)
+- All 167 tests pass; typecheck clean.
+- **Learnings for future iterations:**
+  - `noWaypointCirclesOverlap` uses `Math.hypot` so diagonal distances are checked correctly; the boundary condition (`< 2*WAYPOINT_RADIUS`, i.e. `< 50`) is strict — exact distance 50 passes.
+  - The adjacency model works correctly for 4+ waypoint walks: seg[i] is non-adjacent to all waypoints except wi=i and wi=i+1. Tests with 4-waypoint walks are needed to confirm middle-segment non-adj pairs are checked.
+  - Wildcard waypoints are interior by definition (wildcards are confined to positions 2..N-1); `turnLabelsClearOfNonAdjacentSegments` does NOT skip them — only `isTerminal` waypoints are skipped.
+---
