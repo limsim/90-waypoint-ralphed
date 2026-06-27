@@ -31,6 +31,9 @@ export class Waypoint {
     if (isTerminal && wildcard) {
       throw new Error("First and last waypoints cannot be wildcards");
     }
+    if (wildcard && outboundTurn !== null) {
+      throw new Error("Wildcard waypoints must have no outbound turn (turn is skipped)");
+    }
     return new Waypoint(sequenceNumber, position, outboundTurn, wildcard);
   }
 }

@@ -124,3 +124,31 @@ test("minimum walk: last of 2 is terminal with no turn", () => {
   assert.equal(wp.outboundTurn, null);
   assert.equal(wp.wildcard, false);
 });
+
+test("wildcard with non-null outboundTurn throws", () => {
+  assert.throws(
+    () => Waypoint.create(2, 5, origin, Turn.Left, true),
+    /Wildcard waypoints must have no outbound turn/
+  );
+});
+
+test("wildcard with Right outbound turn also throws", () => {
+  assert.throws(
+    () => Waypoint.create(3, 5, origin, Turn.Right, true),
+    /Wildcard waypoints must have no outbound turn/
+  );
+});
+
+test("negative sequenceNumber throws", () => {
+  assert.throws(
+    () => Waypoint.create(-1, 5, origin, null, false),
+    /out of range/
+  );
+});
+
+test("totalWaypoints = 0 throws", () => {
+  assert.throws(
+    () => Waypoint.create(1, 0, origin, null, false),
+    /totalWaypoints must be at least 2/
+  );
+});
