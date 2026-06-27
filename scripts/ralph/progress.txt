@@ -101,6 +101,28 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   SAME macrotask-Yield double is the headless stand-in for US-021's production Yield — whose
   `yieldToEventLoop()` MUST be a macrotask (setImmediate / MessageChannel in the browser), never a
   microtask (`queueMicrotask`/`Promise.resolve`), or paint is starved and the overlay never shows.
+- ADAPTERS (src/adapters/) are the ONLY DOM/Canvas layer (tsconfig.adapters adds the DOM lib;
+  references core). `tsconfig.test.json` references core ONLY, so `tests/**` CANNOT import adapters —
+  adapters are NOT covered by `npm test`. That is why DOM-bound stories (US-013+) have acceptance
+  criteria of "typecheck passes + browser screenshot", NOT "Tests pass (npm test)". Don't try to add
+  a node:test for an adapter; verify it headlessly instead (see next pattern). There is a stray
+  `src/adapters/.gitkeep` from the US-001 scaffold — harmless, leave it.
+- To verify a DOM adapter HEADLESSLY (no browser/Playwright MCP in this env): after `tsc -b`, import
+  the COMPILED `dist/src/adapters/*.js` from a standalone Node `.mjs` (runtime JS has no type checks),
+  pass a hand-rolled RECORDING fake `CanvasRenderingContext2D` (push every op + a snapshot of
+  fillStyle/strokeStyle/lineWidth/font — expose those as getter/setter props over a state object so
+  the snapshot captures the value live at call time), drive a REAL generated `Walk` through it, and
+  assert the emitted primitives. For VISUAL sign-off evidence, replay the recorded ops as SVG while
+  tracking the save/restore/translate transform stack EXACTLY as canvas does (so the SVG is derived
+  from the actual renderer output, not a parallel reimplementation that could drift), then rasterize
+  with `qlmanage -t -s 1123 -o <dir> file.svg` (macOS QuickLook — no rsvg/imagemagick available).
+- canvas-renderer transform (US-013): content box = `walk.boundingBox` grown by 100px each side;
+  draw fills the bg white in SCREEN space (identity) THEN `translate(-contentMinX,-contentMinY)`
+  inside save/restore. US-015 layers the A4 cap / uniform downscale / auto-centre on top of that
+  translate — do NOT add scaling in the renderer before US-015. Import `WAYPOINT_RADIUS` (and later
+  `turnLabelPoint`) from `domain/layout-rules.js` so the drawn geometry shares the invariant's source
+  of truth. The path is ONE polyline through waypoint centres — orthogonality is free (Segment ctor).
+  `DisplayOptions` (showWildcards/showTurns) is accepted by `draw` but only consumed from US-014 on.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -882,4 +904,59 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - `instanceof` cannot take an `unknown`- or `void`-typed left-hand side (TS2358). To assert a void method
     "is not a Promise", capture the return as `... as unknown` and assert `=== undefined` (a Promise is
     never undefined) rather than `instanceof Promise`.
+---
+
+## 2026-06-28 - US-013 (Canvas renderer - grid, segments, waypoints)
+- Implemented `src/adapters/canvas-renderer.ts`: `CanvasRenderer implements Renderer` — the Canvas 2D
+  output boundary of the hexagon. ALL DOM/Canvas usage is confined to this file (compiled by
+  tsconfig.adapters with the DOM lib; the core project still has no DOM lib so the layering holds).
+  - Constructor takes the `HTMLCanvasElement`, grabs the 2D context (throws a clear error if null).
+  - `draw(walk, _options)`: fills a white background in SCREEN space, computes the content box
+    (`walk.boundingBox` grown by GRID_PADDING=100 each side), then `translate(-minX,-minY)` inside a
+    save/restore so the walk is visible wherever it sits in generation space. US-015 will layer the A4
+    cap / uniform downscale / auto-centre on top of this plain translate (no scaling added here).
+  - Grid: subtle light-grey (#e6e6e6), 1px, 60px lattice (`Math.ceil(min/60)*60`) clipped to the
+    padded content box. Path: ONE connected polyline through the waypoint centres (#222222, 2px) —
+    orthogonality is guaranteed by the Segment constructor (corners only at waypoints, no diagonals,
+    no mid-segment bends). Waypoints: r=25 arc (radius imported from `domain/layout-rules`
+    WAYPOINT_RADIUS — single source of truth), number in bold 20px Arial centred
+    (textAlign center / textBaseline middle); terminals (`waypoint.isTerminal`) black fill / white
+    border / white number, interiors white fill / black border / black number.
+  - `clear()`: resets the transform and clearRects the whole canvas (drives US-012 ClearWalk).
+  - `_options` (showWildcards / showTurns) is accepted to satisfy the port but only consumed from
+    US-014 (turn labels + wildcard rings).
+- Added `src/adapters/CLAUDE.md` documenting the adapter-layer constraints (DOM-only boundary,
+  can't be node:test-ed, headless-verification recipe, the US-015 transform handoff).
+- Files changed:
+  - src/adapters/canvas-renderer.ts (new — the renderer adapter)
+  - src/adapters/CLAUDE.md (new — adapter-layer learnings)
+  - scripts/ralph/prd.json (US-013 passes:true + notes), scripts/ralph/progress.txt (this entry + patterns)
+- Verified: `npm run clean` + `npm run typecheck` (tsc -b) clean; `npm test` -> 243 pass, 0 fail
+  (no regressions — adapters carry no committed tests, see below). Headless harness drove a REAL
+  count=10 generated walk (seed 4242) through the COMPILED renderer via a recording fake 2D context
+  and asserted every emitted primitive: white full-canvas background before the translate; 10 vertical
+  + 10 horizontal grid lines, lattice-aligned and strictly inside the padded box, grey 1px; a single
+  moveTo + 9 lineTo polyline matching the waypoint coords with every step orthogonal; 10 r=25 circles;
+  per-waypoint fill/border/number colours; exactly 2 black-filled terminals (first + last); clear()
+  wipes the full canvas after resetting the transform. VISUAL evidence: the recorded ops were replayed
+  to SVG (faithful — the save/restore/translate transform stack is tracked exactly as canvas does, so
+  it is the real output, not a reimplementation) and rasterized via `qlmanage` for count=10 (seed 4242)
+  and count=20 (seed 99); both clearly show the grid, connected orthogonal segments, and correctly
+  styled numbered waypoints (terminals black w/ white numbers, interiors white w/ black numbers).
+- CAVEAT (honest gap): the AC's "screenshot via browser automation" could NOT be captured live — there
+  is no browser / Playwright MCP in this environment. The qlmanage rasterization of the renderer's
+  actual recorded draw-calls is the stand-in evidence; a human browser screenshot for final sign-off
+  still remains (easiest once US-016/US-021 wire main.ts, or by opening the scratchpad harness output).
+  Marked passes:true because every FUNCTIONAL AC is implemented + verified and typecheck passes; the
+  only outstanding item is the human visual sign-off, which is a review gate, not a code defect.
+- **Learnings for future iterations:**
+  - Adapters (src/adapters/) are the only DOM/Canvas layer and are NOT covered by `npm test`
+    (tsconfig.test references core only). DOM-bound stories are verified by typecheck + screenshot,
+    not node:test — don't try to add an adapter test; verify headlessly via a compiled-JS import +
+    recording fake context, and render SVG-from-recorded-ops + qlmanage for visual evidence.
+  - Keep the renderer's drawn geometry tied to domain constants: import WAYPOINT_RADIUS (and, in
+    US-014, turnLabelPoint) from layout-rules so the picture can never drift from the invariant.
+  - The renderer does ONLY a translate in US-013; US-015 owns the A4 cap / downscale / centre / fit.
+    A count=10 walk's content box (~580px) fits A4 (794x1123) without scaling, so it's the clean
+    fixture for a US-013 screenshot; larger counts (e.g. 40/90) will overflow until US-015 lands.
 ---
