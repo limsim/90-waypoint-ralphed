@@ -138,3 +138,15 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - Use `assert.strictEqual` for reference equality on Heading singletons (apply returns the same static
     instance, not a new object) — deepEqual would also work but strictEqual is a tighter check.
 ---
+
+## 2026-06-27 - US-003 (Heading and Turn value objects) — REFINEMENT
+- US-003 already passed; all 7 acceptance criteria verified green.
+- Refinement: added 2 cycle-invariant tests to tests/heading-turn.test.ts:
+  - "4 Right turns from North returns to North" — verifies CW modular wrap
+  - "4 Left turns from East returns to East" — verifies CCW modular wrap
+  These test the `(idx + delta) % 4` arithmetic more thoroughly without changing implementation.
+- Files changed: tests/heading-turn.test.ts (2 tests added; 16 Heading/Turn tests total, 32 total suite)
+- All 32 tests pass; typecheck clean.
+- **Learnings for future iterations:**
+  - The 4-turn cycle test is a cheap invariant to add to any direction/turn system; catches off-by-one in modular arithmetic.
+---
