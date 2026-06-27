@@ -64,3 +64,29 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - Do NOT commit the working-tree change to `scripts/ralph/ralph.sh` (MAX_ITERATIONS 10->3) — it's
     runner config, not US-001 work; left uncommitted intentionally (also noted in the prior US-001 entry).
 ---
+
+## 2026-06-27 - US-001 (Scaffold the project) — REFINEMENT
+- US-001 already passed; re-verified all 7 acceptance criteria green end to end:
+  - No runtime deps (devDeps = typescript + @types/node, latter only for node:test/assert types).
+  - core tsconfig strict + ESM/NodeNext, lib ES2022 only (NO DOM); layout (domain/application/adapters/
+    main.ts/tests) present; index.html loads ./dist/src/main.js via <script type=module>.
+  - Clean `npm run build` + `npm test` -> 1 pass (scaffold placeholder); `npm run typecheck` OK.
+  - serve: 2 instances -> #1 binds 8000, #2 auto-increments to 8001; curl index.html 200 text/html,
+    dist/src/main.js 200 text/javascript.
+- Probed serve.mjs robustness edges prior passes had NOT exercised (curl pre-normalises raw `../`, so it
+  never reaches the server's guard): **percent-encoded** traversal `/%2e%2e%2f%2e%2e%2fetc%2fhosts` -> 403,
+  malformed `%ZZ` (decodeURIComponent throws) -> 403, directory request `/scripts/` -> 404 (no listing).
+  All correct — the traversal guard genuinely holds.
+- Refinement made: serve.mjs now sends `Cache-Control: no-store` on 200 responses. The `npm run dev`
+  (`tsc -b --watch`) + `npm run serve` loop rebuilds dist/ on every save; without this the browser could
+  serve a stale `dist/src/*.js` from cache. Squarely within US-001's "serve" criterion and de-risks every
+  future UI story (US-013+). Verified header present on both index.html and dist/src/main.js. No build/test impact.
+- Files changed: scripts/serve.mjs (no-store header + comment), CLAUDE.md (serve note: no-store + traversal
+  guard behaviour). Committed CLAUDE.md + serve.mjs only; left scripts/ralph/ralph.sh uncommitted (runner config).
+- **Learnings for future iterations:**
+  - To exercise serve.mjs's path-traversal 403 guard you must percent-encode the slashes (`%2f`) too —
+    curl/browsers normalise a raw `../` client-side, so a plain `../../etc/passwd` request reaches the
+    server already collapsed (becomes a 404 inside ROOT, never hits the 403 path).
+  - serve.mjs serves with `Cache-Control: no-store`; when verifying UI stories in the browser a hard
+    refresh is unnecessary — reloads always re-fetch fresh compiled modules.
+---

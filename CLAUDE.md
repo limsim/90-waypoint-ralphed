@@ -33,7 +33,10 @@ Marcus John Henry Brown's 90 Waypoint Walk. DDD + hexagonal architecture; see `d
   by the glob. (zsh aside: `rm -rf dist *.tsbuildinfo` aborts on `no matches found` since the buildinfo
   lives inside `dist/`; just `rm -rf dist` — the `.tsbuildinfo` files go with it.)
 - `npm run serve` → zero-dependency static server (`scripts/serve.mjs`), port 8000, auto-increments
-  if taken. Serves the repo root so `index.html` and `dist/` are reachable.
+  if taken. Serves the repo root so `index.html` and `dist/` are reachable. Sends
+  `Cache-Control: no-store` so the `tsc -b --watch` + serve dev loop never serves a stale
+  `dist/src/*.js` from the browser cache. Rejects path traversal (raw + percent-encoded) and
+  malformed `%`-encoding with 403; no directory listing.
 - `dist/`, `node_modules/`, `*.tsbuildinfo` are gitignored.
 
 ## Conventions
