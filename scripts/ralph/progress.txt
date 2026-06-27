@@ -47,6 +47,12 @@ Started: Sat 27 Jun 2026 18:13:25 BST
 - walk-generator's count guard is `!Number.isInteger(count) || count < 2` — a fractional count would
   otherwise throw an opaque `RangeError: Invalid array length` deep in placement (`new Array(2.5)`).
   Validate finite-integer-ness at any domain boundary that feeds `new Array(n)`.
+- To test the walk-generator's bounds-growth clause IN ISOLATION (not just the failure path), use a
+  small `initialRegion` no placement fits and A/B the SAME seed on `maxGrowths`: a too-low value fails,
+  the default succeeds. Placement is bounds-independent, so `maxGrowths` is the only variable. (Seed
+  4242, count=10, 200x200 region needs exactly 4 growths.) When refining an already-correct story,
+  prefer adding tests for ACs that are implemented-but-never-asserted — grep existing tests per AC
+  phrase first (e.g. wildcard COUNT was tested but wildcard POSITION-variance was not).
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -606,4 +612,38 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - To force the bounded-failure path deterministically: tiny `initialRegion` + `maxGrowths:0` +
     small `maxPlacementAttempts` + small `maxRerolls`. Placement is spacing-valid but never fits, so the
     loops exhaust to the failure signal and one progress value is yielded per re-roll.
+---
+
+## 2026-06-27 - US-010 (walk-generator domain service) — REFINEMENT
+- US-010 already passed; re-verified all 9 acceptance criteria against the implementation — still
+  green, no implementation change needed. This pass adds 3 tests that close coverage gaps the prior
+  passes left for ACs that *were* implemented but never directly asserted (22 -> 25 walk-generator
+  tests, 221 -> 224 total).
+- Tests added (tests/walk-generator.test.ts):
+  - **bounds-growth rescue** — isolates ADR-0002's MIDDLE clause ("grow bounds 10% up to ~10 times").
+    With a 200x200 `initialRegion` too small to fit a count=10 walk, `maxGrowths:3` exhausts to a
+    failure signal but the default `maxGrowths:10` SUCCEEDS for the same seed (4242). Every earlier
+    bounded test only exercised growth via `maxGrowths:0` (i.e. the failure path) — so the
+    growth-actually-rescues-a-placement behaviour was implemented but unproven until now. Probed the
+    threshold: seed 4242 needs exactly 4 growths (g=0..3 fail, g>=4 succeed), so the 3-vs-10 contrast
+    is a sharp, deterministic boundary.
+  - **wildcard position randomisation** — AC says wildcards have "randomised positions among
+    waypoints 2..N-1". Prior tests pinned the wildcard COUNT and confirmed interior-ness, but not
+    that positions VARY. New test: count=90 (10 wildcards) scatters them to different interior
+    sequence numbers for seed 1 vs seed 2 (`assert.notDeepEqual`).
+  - **DEFAULT_CONFIG guard** — pins the exported budget to ADR-0002 (maxPlacementAttempts=200,
+    maxGrowths=10, maxRerolls=20, growthFactor=1.1, minSegment=60, maxSegment=140, maxScale=8) so a
+    stray edit to the loop budget fails a test instead of silently changing generation behaviour.
+- Files changed: tests/walk-generator.test.ts (+3 tests, +DEFAULT_CONFIG import), scripts/ralph/prd.json
+  (US-010 notes), scripts/ralph/progress.txt (this entry + a Codebase Pattern).
+- Verified: `npm run clean` + `npm test` -> 224 pass, 0 fail (tsc -b typecheck runs first, clean).
+- **Learnings for future iterations:**
+  - To test the growth clause IN ISOLATION (not just the failure path), use a small `initialRegion`
+    that no placement fits and contrast a too-low `maxGrowths` (fails) vs the default (succeeds) on
+    the SAME seed. The placement is bounds-independent (relative coords, centred), so the only thing
+    `maxGrowths` changes is whether the canvas ever gets big enough — a clean A/B on one variable.
+  - When refining a story whose impl is already correct, the highest-value additions are tests for
+    ACs that are IMPLEMENTED but never directly ASSERTED (here: the growth-rescue and "randomised
+    wildcard positions" clauses). Grep the existing tests for each AC phrase before adding — the
+    wildcard COUNT was tested, the wildcard POSITION-VARIANCE was not.
 ---

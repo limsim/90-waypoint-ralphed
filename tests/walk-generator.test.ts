@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   walkGenerator,
   wildcardCountFor,
+  DEFAULT_CONFIG,
   GenerationResult,
   GenerationProgress,
   GeneratorConfig,
@@ -152,6 +153,25 @@ test("wildcard count is max(1, round(count/9)) and all wildcards are interior", 
   }
 });
 
+test("wildcard positions are randomised among the interior waypoints (vary by seed)", () => {
+  // AC: wildcards are placed at *randomised* positions among waypoints 2..N-1. The existing tests
+  // pin the wildcard *count* and confirm every wildcard is interior; this pins the "randomised
+  // positions" half — different seeds must scatter the 10 wildcards (count=90) to different indices.
+  const wildcardIndices = (seed: number) =>
+    expectWalk(drive(90, seed))
+      .waypoints.filter(w => w.wildcard)
+      .map(w => w.sequenceNumber)
+      .sort((a, b) => a - b);
+  const s1 = wildcardIndices(1);
+  const s2 = wildcardIndices(2);
+  assert.equal(s1.length, wildcardCountFor(90));
+  assert.equal(s2.length, wildcardCountFor(90));
+  assert.notDeepEqual(s1, s2, "different seeds should scatter wildcards to different positions");
+  for (const idx of [...s1, ...s2]) {
+    assert.ok(idx >= 2 && idx <= 89, `wildcard at ${idx} must be a strictly interior waypoint`);
+  }
+});
+
 test("only the intended turn is applied: each interior heading change matches its label", () => {
   // Verifies the shape rule end to end — applying a waypoint's outbound turn to its incoming
   // heading yields its outgoing heading; a wildcard leaves the heading unchanged. This rules out
@@ -248,6 +268,25 @@ test("the failure signal is reachable when the bounds can never fit the walk", (
   }
 });
 
+test("bounds growth rescues a placement that does not fit the initial region", () => {
+  // The placement is spacing-valid at any size (spacing is translation-invariant), but a 200x200
+  // region is too small for a 10-waypoint walk to fit. This isolates the *middle* clause of the
+  // bounded control flow (ADR-0002: grow bounds 10% up to ~10 times): with the same seed, too few
+  // growths exhaust to failure while the default budget grows the canvas enough to succeed — proof
+  // that growth, not just whole-sequence re-rolling, does real work. (Prior bounded tests only ever
+  // exercised growth via maxGrowths:0, i.e. the failure path.)
+  const base = {
+    initialRegion: new Bounds(0, 0, 200, 200),
+    maxPlacementAttempts: 200,
+    maxRerolls: 20,
+  };
+  const tooFewGrowths = drive(10, 4242, { ...base, maxGrowths: 3 });
+  assert.equal(tooFewGrowths.ok, false, "3 growths cannot enlarge the region enough to fit");
+  const enoughGrowths = drive(10, 4242, { ...base, maxGrowths: 10 });
+  const walk = expectWalk(enoughGrowths);
+  assert.equal(walk.waypointCount, 10);
+});
+
 test("generation is bounded: even an impossible fit terminates (no infinite loop)", () => {
   // If this returns at all, control flow is bounded. Tight caps keep it quick.
   const result = drive(90, 1, {
@@ -260,6 +299,18 @@ test("generation is bounded: even an impossible fit terminates (no infinite loop
 });
 
 // ---- wildcardCountFor helper ----
+
+test("DEFAULT_CONFIG matches the ADR-0002 bounded-generation budget", () => {
+  // Ties the exported defaults directly to the acceptance criterion / ADR-0002 so a stray edit to
+  // the loop budget is caught here rather than silently changing generation behaviour.
+  assert.equal(DEFAULT_CONFIG.maxPlacementAttempts, 200); // 200 placement attempts per size
+  assert.equal(DEFAULT_CONFIG.maxGrowths, 10); // grow the bounds up to ~10 times
+  assert.equal(DEFAULT_CONFIG.maxRerolls, 20); // ~20 whole-sequence re-rolls
+  assert.equal(DEFAULT_CONFIG.growthFactor, 1.1); // +10% per growth step
+  assert.equal(DEFAULT_CONFIG.minSegment, 60); // segment length range 60..140px
+  assert.equal(DEFAULT_CONFIG.maxSegment, 140);
+  assert.equal(DEFAULT_CONFIG.maxScale, 8); // scalable up to 8x
+});
 
 test("wildcardCountFor: max(1, round(count/9)) clamped to the interior count", () => {
   assert.equal(wildcardCountFor(2), 0); // no interior waypoints
