@@ -21,3 +21,11 @@
   - contains() padding inset: point at exactly padding distance from edge PASSES (>=, <=); one pixel inside padding strip FAILS
   - All domain imports between src/domain/ files must use relative paths with .js extension
 ---
+
+## 2026-06-27 - US-002 (refinement)
+- Refinement pass: added `Bounds.grow` shrink coverage (factor < 0.5)
+- Files changed:
+  - tests/bounds.test.ts (1 test added, now 10 tests; 16 total across suite)
+- All 16 tests pass; typecheck clean
+- No implementation changes needed — original code was correct
+---
