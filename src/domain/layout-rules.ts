@@ -14,8 +14,13 @@ export const BOUNDS_PADDING = 30;
 const NE_DX = TURN_LABEL_OFFSET * Math.cos(Math.PI / 4);
 const NE_DY = -TURN_LABEL_OFFSET * Math.sin(Math.PI / 4);
 
-function turnLabelPoint(wp: Waypoint): Point {
-  return new Point(wp.position.x + NE_DX, wp.position.y + NE_DY);
+/**
+ * The fixed NE (45°, 46px-from-centre) position where a waypoint's outbound turn label sits.
+ * Exported so the walk-generator (US-010) computes label clearance with the exact same geometry
+ * the invariant uses — there must be no divergence between the generator's hot loop and this rule.
+ */
+export function turnLabelPoint(position: Point): Point {
+  return new Point(position.x + NE_DX, position.y + NE_DY);
 }
 
 /** No two waypoint circles (radius 25px) overlap (distance between centres < 50px). */
@@ -100,7 +105,7 @@ export function turnLabelsClearOfNonAdjacentSegments(
 ): boolean {
   for (let wi = 0; wi < waypoints.length; wi++) {
     if (waypoints[wi].isTerminal) continue;
-    const label = turnLabelPoint(waypoints[wi]);
+    const label = turnLabelPoint(waypoints[wi].position);
     for (let si = 0; si < segments.length; si++) {
       if (si === wi - 1 || si === wi) continue;
       if (segments[si].distanceFrom(label) < TURN_LABEL_CLEARANCE) {

@@ -33,6 +33,17 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   `walk.boundingBox` = the separate TIGHT box around waypoints (US-013/US-015 render/A4-fit use this one).
 - layout-rules predicates take mutable `Waypoint[]`/`Segment[]`; when holding `ReadonlyArray`, spread-copy
   (`[...waypoints]`) before calling `checkLayout`/predicates or tsc rejects the readonly→mutable arg.
+- `layout-rules.ts` EXPORTS `turnLabelPoint(position: Point): Point` (NE 45°, 46px). The walk-generator
+  reuses it for its incremental label-clearance check so the hot loop and the `Walk` invariant share the
+  exact same label geometry (no divergence). Reuse it in US-014 (renderer) too rather than recomputing.
+- The walk-generator (`src/domain/walk-generator.ts`) places relative coords then CENTRES them in the
+  bounds: spacing constraints are translation-invariant, so only the within-bounds rule cares about
+  absolute position, and after centring that rule is just a size check (`bboxW+60 <= bounds.width`).
+  Growth fixes size; whole-sequence re-roll fixes spacing (ADR-0002). GREEDY placement dead-ends badly
+  for large counts (~90) — placement MUST use bounded backtracking over segment-length multipliers.
+- A `function*` defers its body until the first `.next()`, so an argument guard like `if (count<2) throw`
+  inside the generator fires on the first `.next()`, NOT when `generate(...)` is called. Tests that drive
+  the iterator (calling `.next()`) still see the throw; a bare `generate(1, rng)` would not.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -502,4 +513,58 @@ Started: Sat 27 Jun 2026 18:13:25 BST
 - **Learnings for future iterations:**
   - Non-integer seeds are silently truncated via `>>> 0` in the constructor — document this in the US-022 adapter as a postcondition when converting URL query parameters to seeds (`parseInt` is safer than `Number` since it always produces an integer, but both work via the `>>> 0` guard).
   - Distribution tests (bucket-count over many draws) catch biases that bounds-only tests miss; use ±25% tolerance for mulberry32 over 5000 draws with a known seed — this seed (777) passes comfortably, validating the PRNG quality.
+---
+
+## 2026-06-27 23:28 BST - US-010 (walk-generator domain service)
+- Implemented `src/domain/walk-generator.ts`: the core generator domain service (ADR-0002, 0004, 0006).
+  - `walkGenerator.generate(count, random, config?)` is a pure synchronous `function*`. It yields a small
+    `GenerationProgress {attempts, rerolls}` (once per re-roll + every `yieldEvery=50` attempts) and
+    RETURNS a `GenerationResult`: `{ok:true, walk}` or `{ok:false, reason, attempts, rerolls}`.
+  - Works on lightweight `Point[]`/`Segment[]` placement buffers; wraps the finished placement in
+    `Walk.create(...)` exactly once at the end (never a draft Walk, ADR-0004).
+  - Shape: starts North; segment 1->2 is straight North (no turn at wp1); leaving interior waypoint
+    index s applies `sequence.get(s-1)` (or skips it if wildcard, heading unchanged); exactly N-2 turns.
+    Direction is fixed by the heading and ONLY the intended turn is applied — segment length scales,
+    direction never does (no opposite-turn/straight/180° fallback).
+  - Segment length: random base `nextInt(60,140)` per segment, scalable up to `maxScale=8x`.
+  - Wildcards: `wildcardCountFor(count) = min(max(1, round(count/9)), count-2)` interior indices chosen
+    by a partial Fisher–Yates shuffle (deterministic, terminating).
+  - Lookahead (`canExtend`): before committing waypoint i, verifies i+1 (and i+2) can still be placed
+    using fixed probe lengths; draws NO randomness (keeps the committed random stream deterministic).
+  - Bounded control flow (ADR-0002): `maxPlacementAttempts=200` per size -> grow bounds `1.1x` up to
+    `maxGrowths=10` -> re-roll the whole turn sequence up to `maxRerolls=20` -> failure signal.
+    `placeOnce` itself is a bounded-backtracking DFS capped at `maxPlacementSteps=6000`.
+- Refactored `src/domain/layout-rules.ts`: EXPORT `turnLabelPoint(position: Point)` (was a private
+  `turnLabelPoint(wp: Waypoint)`) so the generator's incremental check reuses the exact NE-label geometry.
+- Files changed:
+  - src/domain/walk-generator.ts (new)
+  - src/domain/layout-rules.ts (export turnLabelPoint, take a Point)
+  - tests/walk-generator.test.ts (new — 17 tests)
+  - scripts/ralph/prd.json (US-010 passes:true + notes), scripts/ralph/progress.txt (this entry + patterns)
+- Verified: `npm run build`/`npm run typecheck` clean; `npm test` -> 216 pass (199 prior + 17 new).
+  Empirically 30/30 success for counts 10/30/60/90 (avg: 0.2/0.6/2.5/9.3ms; max 34.5ms at count=90).
+- **Learnings for future iterations:**
+  - GREEDY placement (commit shortest valid length, no backtracking) dead-ended ~90% of the time for
+    count=90 (3/30 success, ~360ms/attempt-budget). Adding BOUNDED BACKTRACKING over per-segment length
+    multipliers made it 30/30 at ~9ms avg. For large constrained walks, backtracking is essential — the
+    turn DIRECTIONS are fixed per attempt, so a single placement explores only length scalings; fresh
+    bases (next attempt) and a fresh sequence (re-roll) provide the larger search.
+  - Placement is RELATIVE then CENTRED in bounds. Spacing rules are translation-invariant; only
+    within-bounds cares about absolute position, and after centring it reduces to a size check
+    (`bboxWidth + 2*30 <= bounds.width`). So growth fixes SIZE and re-roll fixes SPACING (ADR-0002).
+    Early-break: if a bounds size produced no spacing-valid placement at all, growth can't help -> re-roll
+    immediately (placement is bounds-independent).
+  - The incremental conflict check (`newWaypointConflicts`) only checks the NEW waypoint/segment against
+    the already-valid prefix — O(i) per step, not O(i^2). It mirrors layout-rules adjacency exactly
+    (`segments[i]` adjacent to `waypoints[i]`/`waypoints[i+1]`; a waypoint's own inbound segment + the
+    previous waypoint's label are the adjacency exclusions). Because `Walk.create` re-runs the FULL
+    invariant at the end and throws on any miss, the "valid across many seeds" test is the proof the
+    incremental check agrees with the invariant — if it were too lax, Walk.create would throw.
+  - A `function*` argument guard (`if (count<2) throw`) fires on the first `.next()`, not at the
+    `generate(...)` call. `assert.throws` works only if the test actually drives the iterator.
+  - `-0` vs `+0`: `node:assert deepStrictEqual` distinguishes them. Rotating a unit direction can yield
+    `-0` (e.g. `-dir.dy` when `dir.dy===0`); normalise with `+ 0` before comparing in tests.
+  - US-011 (GenerateWalk use case) drives this iterator: `let s = gen.next(); while(!s.done){ await
+    yield.yieldToEventLoop(); s = gen.next(); } return s.value;` — ignore the yielded progress value;
+    `s.value` on done is the GenerationResult.
 ---
