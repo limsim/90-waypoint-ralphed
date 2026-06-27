@@ -95,3 +95,21 @@ test("get() throws RangeError for negative index", () => {
   const seq = TurnSequence.generate(5, stubSource([0.3]));
   assert.throws(() => seq.get(-1), /out of bounds/);
 });
+
+test("get() on empty sequence (N=2) throws RangeError", () => {
+  const seq = TurnSequence.generate(2, stubSource([0.3]));
+  assert.throws(() => seq.get(0), /out of bounds/);
+});
+
+test("sequence exactly matches known source values", () => {
+  // [0.1, 0.9, 0.3, 0.7] → L, R, L, R for N=6 (4 turns)
+  const seq = TurnSequence.generate(6, stubSource([0.1, 0.9, 0.3, 0.7]));
+  assert.deepEqual([...seq.turns], [Turn.Left, Turn.Right, Turn.Left, Turn.Right]);
+});
+
+test("waypointCount = 0 throws", () => {
+  assert.throws(
+    () => TurnSequence.generate(0, stubSource([0.5])),
+    /waypointCount must be at least 2/
+  );
+});
