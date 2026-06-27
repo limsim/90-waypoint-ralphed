@@ -121,3 +121,29 @@ test("seed=0xFFFFFFFF (32-bit max) produces valid nextFloat values", () => {
     assert.ok(v >= 0 && v < 1, `seed=0xFFFFFFFF value ${v} out of [0,1)`);
   }
 });
+
+test("non-integer seed is truncated to 32-bit integer (>>> 0)", () => {
+  // US-022 reads the seed from a URL parameter (parseInt/Number), so a
+  // float like 42.9 must produce the same stream as the integer 42.
+  const a = new SeededRandom(42.9);
+  const b = new SeededRandom(42);
+  for (let i = 0; i < 20; i++) {
+    assert.equal(a.nextFloat(), b.nextFloat());
+  }
+});
+
+test("nextInt distributes roughly uniformly across [0, 4]", () => {
+  const rng = new SeededRandom(777);
+  const buckets = [0, 0, 0, 0, 0];
+  const draws = 5000;
+  for (let i = 0; i < draws; i++) {
+    buckets[rng.nextInt(0, 4)]++;
+  }
+  // Each bucket should have ~1000 hits; allow generous ±25% tolerance.
+  for (let v = 0; v <= 4; v++) {
+    assert.ok(
+      buckets[v] >= 750 && buckets[v] <= 1250,
+      `bucket[${v}]=${buckets[v]} deviates too far from expected ~1000`,
+    );
+  }
+});
