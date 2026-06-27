@@ -182,3 +182,19 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - `distanceFrom` uses `Math.hypot` for the off-corner case to avoid manual sqrt; precision is exact for integer inputs.
   - The `Orientation` type is exported alongside `Segment` so layout-rule code can reference it without re-declaring.
 ---
+
+## 2026-06-27 - US-004 (Segment value object) — REFINEMENT
+- US-004 already passed; all 6 acceptance criteria verified green.
+- Refinement: added 6 tests to tests/segment.test.ts (23 → 29 Segment tests, 57 → 63 total):
+  - Co-linear horizontal segments with overlap → separation=0, overlapLength=50
+  - Co-linear vertical segments with no range overlap → separation=0, overlapLength=0
+  - start/end points are accessible (layout-rules and renderer consumers use these)
+  - distanceFrom returns 0 at start endpoint
+  - distanceFrom returns 0 at end endpoint
+  - distanceFrom is identical on both sides of the segment axis (symmetry invariant)
+- Files changed: tests/segment.test.ts (6 tests added)
+- All 63 tests pass; typecheck clean.
+- **Learnings for future iterations:**
+  - Co-linear segments (same axis line, separation=0) must pass the layout-rule's "closer than 55px" check — separation=0 always violates it; ensure US-007 predicates treat co-linear segments as failing the spacing constraint.
+  - `segment.start` and `segment.end` (readonly Point) are the canonical handles for US-007 and the renderer; the tests now confirm they are accessible.
+---
