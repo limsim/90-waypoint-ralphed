@@ -1,0 +1,23 @@
+## Codebase Patterns
+- Domain files live in src/domain/; all imports use .js extension (ESM, NodeNext resolution)
+- Tests use node:test + node:assert/strict; run via npm test (tsc -b then node --test glob)
+- After removing/renaming source files, run npm run clean before npm test to purge stale dist/ outputs
+- Point and Bounds are pure value objects in src/domain/ with no DOM/Canvas deps
+
+---
+
+## 2026-06-27 - US-002
+- What was implemented: Point and Bounds value objects in src/domain/
+  - Point: immutable (x, y), equals(), translate() returning new Point
+  - Bounds: immutable (minX, minY, maxX, maxY), width/height getters, contains(point, padding=0), grow(factor) expanding from centre
+- Files changed:
+  - src/domain/point.ts (new)
+  - src/domain/bounds.ts (new)
+  - tests/point.test.ts (new, 5 tests)
+  - tests/bounds.test.ts (new, 9 tests)
+- **Learnings for future iterations:**
+  - The source tree was wiped (commit 29db285) so US-002..US-005 implementations were lost even though passes:true; each story may need re-implementation
+  - Bounds.grow() expands from the bounding-box centre — keeps centroid stable during generation-space scaling
+  - contains() padding inset: point at exactly padding distance from edge PASSES (>=, <=); one pixel inside padding strip FAILS
+  - All domain imports between src/domain/ files must use relative paths with .js extension
+---
