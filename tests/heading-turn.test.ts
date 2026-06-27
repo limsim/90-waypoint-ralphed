@@ -1,0 +1,64 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { Heading } from "../src/domain/heading.js";
+import { Turn } from "../src/domain/turn.js";
+
+// Unit step vectors
+test("Heading: North step is (0, -1) - up means decreasing y", () => {
+  assert.deepEqual({ dx: Heading.North.dx, dy: Heading.North.dy }, { dx: 0, dy: -1 });
+});
+
+test("Heading: East step is (1, 0)", () => {
+  assert.deepEqual({ dx: Heading.East.dx, dy: Heading.East.dy }, { dx: 1, dy: 0 });
+});
+
+test("Heading: South step is (0, 1)", () => {
+  assert.deepEqual({ dx: Heading.South.dx, dy: Heading.South.dy }, { dx: 0, dy: 1 });
+});
+
+test("Heading: West step is (-1, 0)", () => {
+  assert.deepEqual({ dx: Heading.West.dx, dy: Heading.West.dy }, { dx: -1, dy: 0 });
+});
+
+// Turn.Left (CCW)
+test("Heading: North + Left = West", () => {
+  assert.strictEqual(Heading.North.apply(Turn.Left), Heading.West);
+});
+
+test("Heading: East + Left = North", () => {
+  assert.strictEqual(Heading.East.apply(Turn.Left), Heading.North);
+});
+
+test("Heading: South + Left = East", () => {
+  assert.strictEqual(Heading.South.apply(Turn.Left), Heading.East);
+});
+
+test("Heading: West + Left = South", () => {
+  assert.strictEqual(Heading.West.apply(Turn.Left), Heading.South);
+});
+
+// Turn.Right (CW)
+test("Heading: North + Right = East", () => {
+  assert.strictEqual(Heading.North.apply(Turn.Right), Heading.East);
+});
+
+test("Heading: East + Right = South", () => {
+  assert.strictEqual(Heading.East.apply(Turn.Right), Heading.South);
+});
+
+test("Heading: South + Right = West", () => {
+  assert.strictEqual(Heading.South.apply(Turn.Right), Heading.West);
+});
+
+test("Heading: West + Right = North", () => {
+  assert.strictEqual(Heading.West.apply(Turn.Right), Heading.North);
+});
+
+// Turn enum values
+test("Turn.Left has value 'L'", () => {
+  assert.strictEqual(Turn.Left, "L");
+});
+
+test("Turn.Right has value 'R'", () => {
+  assert.strictEqual(Turn.Right, "R");
+});
