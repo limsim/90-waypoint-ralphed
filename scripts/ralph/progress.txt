@@ -243,3 +243,17 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - `get(index)` now throws `RangeError` with "out of bounds" in the message — US-010 walk generator can rely on it rather than adding its own bounds check.
   - The exact 0.5 boundary mapping to `Right` is now a documented contract in a test; if US-010 ever changes the threshold it will be caught here first.
 ---
+
+## 2026-06-27 - US-005 (TurnSequence value object) — REFINEMENT
+- US-005 already passed; all 5 acceptance criteria remain green.
+- Refinement: added 3 edge-case tests to tests/turn-sequence.test.ts (14 → 17 TurnSequence tests, 81 → 84 total):
+  - `get(0)` on an empty sequence (N=2, length=0) throws RangeError — prior out-of-bounds tests only used non-empty sequences; this closes the N=2 boundary gap.
+  - Exact sequence shape verification: generates with known stub values [0.1, 0.9, 0.3, 0.7] and asserts the output is [L, R, L, R] for N=6 — the determinism test only checked two calls match, not what the actual output is.
+  - `waypointCount = 0` throws — prior throw tests covered 1 and -5; 0 was an untested case within the `< 2` guard.
+- Files changed:
+  - tests/turn-sequence.test.ts (3 tests added)
+- All 84 tests pass; typecheck clean. No implementation changes needed.
+- **Learnings for future iterations:**
+  - The N=2 empty-sequence `get(0)` case is the sharpest test for the `index >= length` guard (0 >= 0 is not obvious at a glance); worth adding for any bounded-index accessor.
+  - Exact sequence shape tests (specific input → specific output array) are stronger than determinism tests alone; add them when the mapping logic is non-trivial.
+---
