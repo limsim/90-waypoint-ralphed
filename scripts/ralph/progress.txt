@@ -150,3 +150,18 @@ Started: Sat 27 Jun 2026 18:13:25 BST
 - **Learnings for future iterations:**
   - The 4-turn cycle test is a cheap invariant to add to any direction/turn system; catches off-by-one in modular arithmetic.
 ---
+
+## 2026-06-27 - US-003 (Heading and Turn value objects) — REFINEMENT
+- US-003 already passed; all 7 acceptance criteria remain green.
+- Refinement: added 2 inverse-property invariant tests to tests/heading-turn.test.ts:
+  - "Right then Left is identity for all headings" — loops all 4 headings, verifies R→L returns to origin
+  - "Left then Right is identity for all headings" — loops all 4 headings, verifies L→R returns to origin
+  These verify the mathematical property that Left and Right are mutual inverses — a regression guard the
+  prior test suite lacked (individual per-heading turn tests verify specific directions; cycle tests verify
+  modular wrap; this tests the inverse relationship directly).
+- Files changed: tests/heading-turn.test.ts (2 tests added; 18 Heading/Turn tests total, 34 total suite)
+- All 34 tests pass; typecheck clean.
+- **Learnings for future iterations:**
+  - The L+R=identity invariant is the strongest single test for a rotation system: it catches any asymmetry
+    between Left and Right without requiring knowledge of specific turn directions.
+---
