@@ -154,3 +154,52 @@ test("Segment: parallelOverlap is symmetric", () => {
   assert.strictEqual(r1.separation, r2.separation);
   assert.strictEqual(r1.overlapLength, r2.overlapLength);
 });
+
+// Co-linear segments (separation = 0) — critical edge case for layout spacing rules
+
+test("Segment: co-linear horizontal segments with overlap return separation 0", () => {
+  const s1 = new Segment(new Point(0, 0), new Point(100, 0));
+  const s2 = new Segment(new Point(50, 0), new Point(150, 0));
+  const r = s1.parallelOverlap(s2);
+  assert.ok(r !== null);
+  assert.strictEqual(r.separation, 0);
+  assert.strictEqual(r.overlapLength, 50);
+});
+
+test("Segment: co-linear vertical segments with no range overlap return separation 0 and overlapLength 0", () => {
+  const s1 = new Segment(new Point(0, 0), new Point(0, 50));
+  const s2 = new Segment(new Point(0, 60), new Point(0, 110));
+  const r = s1.parallelOverlap(s2);
+  assert.ok(r !== null);
+  assert.strictEqual(r.separation, 0);
+  assert.strictEqual(r.overlapLength, 0);
+});
+
+// start/end accessibility — used by layout-rules and renderer
+
+test("Segment: start and end points are accessible", () => {
+  const a = new Point(10, 20);
+  const b = new Point(10, 80);
+  const s = new Segment(a, b);
+  assert.ok(s.start.equals(a));
+  assert.ok(s.end.equals(b));
+});
+
+// distanceFrom — at endpoints
+
+test("Segment: distanceFrom returns 0 at start endpoint", () => {
+  const s = new Segment(new Point(10, 20), new Point(10, 80));
+  assert.strictEqual(s.distanceFrom(new Point(10, 20)), 0);
+});
+
+test("Segment: distanceFrom returns 0 at end endpoint", () => {
+  const s = new Segment(new Point(10, 20), new Point(10, 80));
+  assert.strictEqual(s.distanceFrom(new Point(10, 80)), 0);
+});
+
+// distanceFrom — symmetric about the segment axis
+
+test("Segment: distanceFrom is identical on both sides of a horizontal segment", () => {
+  const s = new Segment(new Point(0, 0), new Point(100, 0));
+  assert.strictEqual(s.distanceFrom(new Point(50, 25)), s.distanceFrom(new Point(50, -25)));
+});
