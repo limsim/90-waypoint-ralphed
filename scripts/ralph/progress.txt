@@ -60,6 +60,26 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   0. Same setup pins the failure signal's running totals (attempts === maxPlacementAttempts*sizes,
   rerolls === maxRerolls). It's robust because the inner loop always runs to its cap regardless of
   whether any individual placeOnce succeeds (attempts++ happens before placeOnce is called).
+- Application use cases live in `src/application/` and depend ONLY on domain + ports (tsconfig.core
+  has no DOM lib, so a stray DOM reference fails to compile — the layering is mechanically enforced).
+  `GenerateWalk` (src/application/generate-walk.ts) drives the synchronous walk-generator iterator
+  with `let s = it.next(); while(!s.done){ await port.yieldToEventLoop(); s = it.next(); } return s.value;`
+  — DISCARD the yielded progress; the terminal `s.value` is the GenerationResult, returned verbatim.
+- `yield` is a RESERVED word in ESM/strict scope — you cannot name a local/param/field `yield`. Name
+  Yield-port fields/vars `eventLoopYield` (or similar). (A property access like `obj.yield` is legal,
+  but a bare identifier is not — don't risk it.)
+- Inject STABLE collaborators at construction (the Yield port) but pass PER-GENERATION state as a
+  method arg (the RandomSource on `execute(count, random, config?)`). A shared mutable SeededRandom
+  reused across generations would make walk N depend on all prior draws, breaking US-022's
+  single-seed reproducibility — so each Generate must get a FRESH seeded source. The use case stays
+  seed-agnostic; seed choice/URL handling is the adapter/composition layer's job (US-021/US-022).
+- Test an async use case that wraps a synchronous generator with two Yield doubles: an immediate
+  no-op (`{ yieldToEventLoop: () => Promise.resolve() }`) for behaviour assertions, and a CountingYield
+  (increments a `calls` field) to prove the event loop is actually freed (>=1 on success, >=1 per
+  re-roll on the failure path). The strongest correctness check is a "faithful driver" test: assert
+  the use-case result equals the result of driving `walkGenerator.generate` synchronously for the
+  SAME seed — the async wrapper must not perturb the random stream. A `function*` count guard fires
+  on the first `.next()`, so `execute(badCount, ...)` REJECTS — assert via `assert.rejects`.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -684,4 +704,40 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - Reuse a setup an existing test already PROVES (here the 100x100-never-fits region) when adding a
     new assertion about behaviour along the same path — it inherits that test's robustness argument
     instead of introducing a fresh fragile fixture.
+---
+
+## 2026-06-27 - US-011 (GenerateWalk use case)
+- Implemented `src/application/generate-walk.ts`: the `GenerateWalk` application use case (ADR-0003, 0006).
+  - `class GenerateWalk` — constructor injects ONLY the `Yield` port (the single stable collaborator).
+  - `async execute(count, random, config?): Promise<GenerationResult>` — drives the synchronous
+    `walkGenerator.generate(...)` iterator one `.next()` at a time, `await`ing
+    `eventLoopYield.yieldToEventLoop()` between every yield so the browser can paint the loading
+    overlay (US-016) before the next synchronous placement chunk. The yielded `GenerationProgress`
+    is DISCARDED (the overlay spinner is pure CSS); only the terminal `GenerationResult` is returned
+    verbatim — `{ok:true,walk}` on success or `{ok:false,reason,attempts,rerolls}` on exhausted
+    re-rolls (US-020 renders the failure). Generation is bounded (ADR-0002) so execute always settles.
+  - RandomSource is a per-call arg (not a constructor dep) so each generation gets a FRESH seeded
+    stream — keeps the use case seed-agnostic and lets US-022 reproduce a walk from a single seed.
+    Optional `config` passthrough mirrors the generator signature; tests use it to force the failure path.
+- Files changed:
+  - src/application/generate-walk.ts (new — use case)
+  - tests/generate-walk.test.ts (new — 9 tests)
+  - scripts/ralph/prd.json (US-011 passes:true + notes), scripts/ralph/progress.txt (this entry + patterns)
+- Verified: `npm run clean` + `npm test` -> 234 pass (225 prior + 9 new), 0 fail; `npm run typecheck` clean.
+- Tests (tests/generate-walk.test.ts): success returns a valid Walk (count 10 & 90); a CountingYield
+  proves the event loop is freed >=1 time on success and >=1 per re-roll on the failure path; a
+  faithful-driver test asserts the use-case result EQUALS the synchronously-driven generator result
+  for the same seed (proving the async wrapper doesn't perturb the random stream, and that the
+  progress value is discarded); determinism (same seed twice -> identical Walk); the exhausted-re-roll
+  config surfaces `{ok:false}` with a /re-roll/i reason; RangeError rejection for count<2 and count=2.5.
+- **Learnings for future iterations:**
+  - `yield` is reserved in ESM/strict scope — name the Yield-port field `eventLoopYield`, never `yield`.
+  - Inject STABLE deps at construction (Yield) and pass PER-GENERATION state as a method arg
+    (RandomSource). A shared mutable SeededRandom across generations would break US-022's single-seed
+    reproducibility — each Generate needs a fresh seeded source; the use case stays seed-agnostic.
+  - The generator's count guard fires on the first `.next()`, so `execute(badCount, ...)` REJECTS its
+    promise — test the guard with `await assert.rejects(...)`, not a synchronous `assert.throws`.
+  - US-016 (dom-controls) will construct `new GenerateWalk(yieldPort)` once and, per Generate click,
+    create the production RandomSource and `await useCase.execute(count, random)`; branch on
+    `result.ok` to render the walk (Renderer port) or the US-020 failure overlay.
 ---
