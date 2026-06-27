@@ -10,6 +10,7 @@
     "dev": "tsc -b --watch",
     "clean": "rm -rf dist",
     "test": "tsc -b && node --test \"dist/tests/**/*.test.js\"",
+    "verify:renderer": "tsc -b && node scripts/verify-renderer.mjs",
     "serve": "node scripts/serve.mjs"
   },
   "devDependencies": {

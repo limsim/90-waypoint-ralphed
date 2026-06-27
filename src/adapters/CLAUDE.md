@@ -8,7 +8,12 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
 - `tsconfig.test.json` references **core only**, so `tests/**` CANNOT import from `src/adapters/`.
   Adapters are NOT covered by `npm test`. That's why DOM-bound stories (e.g. US-013) have
   **typecheck + browser screenshot** as their acceptance criteria, not "Tests pass (npm test)".
-- To verify a renderer headlessly anyway: after `tsc -b`, import the COMPILED
+- A committed headless harness exists: **`npm run verify:renderer`** (`scripts/verify-renderer.mjs`)
+  builds then drives REAL generated walks (counts 2/10/20/90) through `CanvasRenderer` with a recording
+  fake 2D context and asserts every primitive (grid lattice & box, orthogonal polyline, r=25 circles,
+  terminal/interior fill·border·number colours, exactly-2-black-terminals, `clear()`, null-context
+  throw). It is the regression gate for the renderer — **extend it when US-014/US-015 add to `draw()`**.
+- To verify a renderer headlessly from scratch: after `tsc -b`, import the COMPILED
   `dist/src/adapters/*.js` from a standalone Node script (the compiled JS has no type checks at
   runtime), pass a hand-rolled **recording fake** `CanvasRenderingContext2D` (record every op +
   the current `fillStyle`/`strokeStyle`/`lineWidth`/`font` at call time via getter/setter props),
