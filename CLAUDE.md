@@ -29,9 +29,9 @@ Marcus John Henry Brown's 90 Waypoint Walk. DDD + hexagonal architecture; see `d
   GOTCHA: `node --test <dir>` tries to load the dir as a module — you MUST pass a **glob** of compiled
   `.js` files, not a directory. Test files are named `*.test.ts`.
   GOTCHA: `tsc -b` does NOT delete orphaned outputs. After **removing or renaming** a source/test file,
-  `rm -rf dist` before `npm test`, or stale `dist/tests/*.test.js` keep getting run by the glob.
-  (zsh aside: `rm -rf dist *.tsbuildinfo` aborts on `no matches found` since the buildinfo lives inside
-  `dist/`; just `rm -rf dist` — the `.tsbuildinfo` files go with it.)
+  run `npm run clean` (`rm -rf dist`) before `npm test`, or stale `dist/tests/*.test.js` keep getting run
+  by the glob. (zsh aside: `rm -rf dist *.tsbuildinfo` aborts on `no matches found` since the buildinfo
+  lives inside `dist/`; just `rm -rf dist` — the `.tsbuildinfo` files go with it.)
 - `npm run serve` → zero-dependency static server (`scripts/serve.mjs`), port 8000, auto-increments
   if taken. Serves the repo root so `index.html` and `dist/` are reachable.
 - `dist/`, `node_modules/`, `*.tsbuildinfo` are gitignored.

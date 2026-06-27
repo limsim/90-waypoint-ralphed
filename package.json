@@ -8,6 +8,7 @@
     "build": "tsc -b",
     "typecheck": "tsc -b",
     "dev": "tsc -b --watch",
+    "clean": "rm -rf dist",
     "test": "tsc -b && node --test \"dist/tests/**/*.test.js\"",
     "serve": "node scripts/serve.mjs"
   },

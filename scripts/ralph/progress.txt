@@ -43,3 +43,24 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - There is an unrelated working-tree tweak to `scripts/ralph/ralph.sh` (MAX_ITERATIONS 10->3); left
     uncommitted intentionally since it is runner config, not US-001 work.
 ---
+
+## 2026-06-27 - US-001 (Scaffold the project) — REFINEMENT
+- US-001 already passed; re-verified all 7 acceptance criteria end to end:
+  - No runtime deps (devDeps = typescript + @types/node, the latter only for node:test types).
+  - core tsconfig: strict, ESM/NodeNext, lib ES2022 only (NO DOM) — domain/application can't touch the DOM.
+  - Layout present: src/domain, src/application, src/adapters, src/main.ts, tests/.
+  - Scripts work: build/typecheck (tsc -b), dev (watch), test (headless node:test glob), serve.
+  - index.html loads compiled entry `./dist/src/main.js` via <script type="module">.
+  - Clean `npm run build` + `npm test` -> 1 pass (scaffold placeholder). typecheck OK.
+  - serve: started two instances; #2 bound 8000, #1 auto-incremented to 8001. curl: index.html 200
+    text/html, dist/src/main.js 200 text/javascript, traversal + missing-file both non-200.
+- Refinement made: added `npm run clean` (= `rm -rf dist`) to package.json and pointed the CLAUDE.md
+  "stale orphaned dist outputs" gotcha at it. This operationalises the workaround future iterations are
+  repeatedly told to run by hand after deleting/renaming a .ts file. No behavioural change to build/test.
+- Files changed: package.json (clean script), CLAUDE.md (gotcha now references `npm run clean`).
+- **Learnings for future iterations:**
+  - After deleting/renaming a source or test file, run `npm run clean` before `npm test` (was a raw
+    `rm -rf dist`); incremental `tsc -b` leaves orphaned `dist/tests/*.test.js` that the glob re-runs.
+  - Do NOT commit the working-tree change to `scripts/ralph/ralph.sh` (MAX_ITERATIONS 10->3) — it's
+    runner config, not US-001 work; left uncommitted intentionally (also noted in the prior US-001 entry).
+---
