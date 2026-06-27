@@ -75,3 +75,16 @@ test("Heading: 4 Left turns from East returns to East", () => {
   for (let i = 0; i < 4; i++) h = h.apply(Turn.Left);
   assert.strictEqual(h, Heading.East);
 });
+
+// Left and Right are inverses: applying both in either order returns to origin
+test("Heading: Right then Left is identity for all headings", () => {
+  for (const h of [Heading.North, Heading.East, Heading.South, Heading.West]) {
+    assert.strictEqual(h.apply(Turn.Right).apply(Turn.Left), h);
+  }
+});
+
+test("Heading: Left then Right is identity for all headings", () => {
+  for (const h of [Heading.North, Heading.East, Heading.South, Heading.West]) {
+    assert.strictEqual(h.apply(Turn.Left).apply(Turn.Right), h);
+  }
+});
