@@ -44,6 +44,9 @@ Started: Sat 27 Jun 2026 18:13:25 BST
 - A `function*` defers its body until the first `.next()`, so an argument guard like `if (count<2) throw`
   inside the generator fires on the first `.next()`, NOT when `generate(...)` is called. Tests that drive
   the iterator (calling `.next()`) still see the throw; a bare `generate(1, rng)` would not.
+- walk-generator's count guard is `!Number.isInteger(count) || count < 2` — a fractional count would
+  otherwise throw an opaque `RangeError: Invalid array length` deep in placement (`new Array(2.5)`).
+  Validate finite-integer-ness at any domain boundary that feeds `new Array(n)`.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -567,4 +570,40 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - US-011 (GenerateWalk use case) drives this iterator: `let s = gen.next(); while(!s.done){ await
     yield.yieldToEventLoop(); s = gen.next(); } return s.value;` — ignore the yielded progress value;
     `s.value` on done is the GenerationResult.
+---
+
+## 2026-06-27 23:38 BST - US-010 (walk-generator domain service) — REFINEMENT
+- US-010 already passed; re-verified all 9 acceptance criteria against the implementation and they
+  remain green (function* with progress yields + GenerationResult; placement buffer wrapped in
+  Walk.create once; North-start shape with N-2 turns; 60-140px lengths scalable to 8x; wildcards
+  max(1,round(count/9)) interior; only-intended-turn; canExtend lookahead for i+1/i+2; bounded
+  attempts->growth->reroll->failure).
+- Robustness fix: hardened the input guard from `count < 2` to `!Number.isInteger(count) || count < 2`.
+  A fractional count (e.g. 2.5) previously slipped past the guard and threw an opaque
+  `RangeError: Invalid array length` deep inside placement (`new Array(2.5)`); it now fails fast with a
+  clear domain message. Both paths are RangeError, so existing `assert.throws(..., RangeError)` holds.
+- Added 5 tests (17 -> 22 walk-generator tests, 216 -> 221 total):
+  - count=2 minimum boundary: a single straight-North segment, no interior, no wildcards.
+  - count=3 boundary: the sole interior waypoint is the (only) wildcard -> two collinear North segments;
+    Walk.create still accepts it (closes the smallest-interior-walk gap; prior tests started at count=10).
+  - segment-length decomposition: every finished segment length = base in [60,140] x integer mult in
+    [1,8] — validates the "60-140px scalable to 8x" AC directly (translation/centring preserves length).
+  - progress monotonicity: drives the impossible-fit path (4 re-rolls) and asserts attempts/rerolls are
+    non-decreasing and one progress value is yielded per re-roll (rerolls cover 0..3).
+  - non-integer guard: drive(2.5) throws RangeError matching /at least 2 \(integer\) waypoints/.
+- Files changed: src/domain/walk-generator.ts (guard), tests/walk-generator.test.ts (+5 tests),
+  scripts/ralph/prd.json (US-010 notes), scripts/ralph/progress.txt (this entry + a Codebase Pattern).
+- Verified: `npm run clean` + `npm run typecheck` clean; `npm test` -> 221 pass (0 fail).
+- **Learnings for future iterations:**
+  - Validate finite-integer-ness at any domain boundary that later feeds `new Array(n)` — otherwise a
+    bad numeric input surfaces as a confusing low-level "Invalid array length" rather than a domain error.
+  - count=2 and count=3 are the sharpest generator boundaries: count=3's single interior is always the
+    wildcard (wildcardCountFor(3)=1), so it degenerates to a straight collinear North line — a good
+    minimal fixture for confirming wildcard-heading-unchanged semantics produce a valid Walk.
+  - Segment lengths are exact integers (base*mult) and translation-invariant (centring shifts both
+    endpoints equally), so a "length decomposes into base∈[60,140] × mult∈[1,8]" assertion is exact and
+    non-flaky — a stronger check than a loose `60 <= len <= 1120` range.
+  - To force the bounded-failure path deterministically: tiny `initialRegion` + `maxGrowths:0` +
+    small `maxPlacementAttempts` + small `maxRerolls`. Placement is spacing-valid but never fits, so the
+    loops exhaust to the failure signal and one progress value is yielded per re-roll.
 ---

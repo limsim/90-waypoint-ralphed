@@ -58,6 +58,29 @@ for (const count of [10, 25, 60, 90]) {
   });
 }
 
+test("minimum walk (count=2): a single straight-North segment, no interior, no wildcards", () => {
+  const walk = expectWalk(drive(2, 4242));
+  assert.equal(walk.waypointCount, 2);
+  assert.equal(walk.segments.length, 1);
+  assert.equal(walk.waypoints.filter(w => w.wildcard).length, 0);
+  // Both terminals carry no turn; the lone segment points straight North (up = decreasing y).
+  assert.equal(walk.waypoints[0].outboundTurn, null);
+  assert.equal(walk.waypoints[1].outboundTurn, null);
+  assert.equal(walk.waypoints[0].position.x, walk.waypoints[1].position.x);
+  assert.ok(walk.waypoints[1].position.y < walk.waypoints[0].position.y);
+});
+
+test("smallest interior walk (count=3): exactly one wildcard, which is the sole interior waypoint", () => {
+  // wildcardCountFor(3) === 1, so the only interior waypoint (seq 2) must be the wildcard: the
+  // heading is unchanged through it, giving two collinear North segments — still a valid Walk.
+  const walk = expectWalk(drive(3, 4242));
+  assert.equal(walk.waypointCount, 3);
+  const wildcards = walk.waypoints.filter(w => w.wildcard);
+  assert.equal(wildcards.length, 1);
+  assert.equal(wildcards[0].sequenceNumber, 2);
+  assert.equal(wildcards[0].outboundTurn, null);
+});
+
 test("produced walks are valid across many seeds (no Walk.create violation)", () => {
   // A successful result means Walk.create accepted the placement, so reaching ok===true across a
   // spread of seeds proves the generator's incremental checks agree with the Walk invariant.
@@ -153,6 +176,25 @@ test("only the intended turn is applied: each interior heading change matches it
   }
 });
 
+test("every segment length is a base in [60,140] scaled by an integer 1..8 (AC: 60-140px, up to 8x)", () => {
+  // Each segment is `base * mult` with base = nextInt(60,140) and mult ∈ 1..maxScale (8). Translation
+  // (centring) preserves lengths, so each finished length must admit such a decomposition.
+  for (const count of [10, 60, 90]) {
+    const walk = expectWalk(drive(count, 4242));
+    for (const seg of walk.segments) {
+      const len = seg.length;
+      const decomposes = [1, 2, 3, 4, 5, 6, 7, 8].some(mult => {
+        const base = len / mult;
+        return Number.isInteger(base) && base >= 60 && base <= 140;
+      });
+      assert.ok(
+        decomposes,
+        `segment length ${len} is not base∈[60,140] × mult∈[1,8] (count=${count})`
+      );
+    }
+  }
+});
+
 // ---- progress yields ----
 
 test("the generator yields a small progress value (once per re-roll / batch)", () => {
@@ -162,6 +204,30 @@ test("the generator yields a small progress value (once per re-roll / batch)", (
   const progress = first.value as GenerationProgress;
   assert.equal(typeof progress.attempts, "number");
   assert.equal(typeof progress.rerolls, "number");
+});
+
+test("progress values are non-decreasing and yielded once per re-roll", () => {
+  // Force the impossible-fit path so several re-rolls run; each re-roll yields once at its top.
+  const gen = walkGenerator.generate(10, new SeededRandom(7), {
+    initialRegion: new Bounds(0, 0, 100, 100),
+    maxGrowths: 0,
+    maxPlacementAttempts: 2,
+    maxRerolls: 4,
+  });
+  const progress: GenerationProgress[] = [];
+  let step = gen.next();
+  while (!step.done) {
+    progress.push(step.value);
+    step = gen.next();
+  }
+  assert.ok(progress.length >= 4, "expected at least one progress value per re-roll");
+  for (let i = 1; i < progress.length; i++) {
+    assert.ok(progress[i].attempts >= progress[i - 1].attempts, "attempts must not decrease");
+    assert.ok(progress[i].rerolls >= progress[i - 1].rerolls, "rerolls must not decrease");
+  }
+  // The per-re-roll yields cover re-roll indices 0..maxRerolls-1.
+  assert.equal(progress[0].rerolls, 0);
+  assert.ok(progress.some(p => p.rerolls === 3));
 });
 
 // ---- failure signal ----
@@ -208,4 +274,8 @@ test("wildcardCountFor: max(1, round(count/9)) clamped to the interior count", (
 
 test("generate throws RangeError for fewer than 2 waypoints", () => {
   assert.throws(() => drive(1, 7), RangeError);
+});
+
+test("generate throws RangeError for a non-integer count (clear message, not 'Invalid array length')", () => {
+  assert.throws(() => drive(2.5, 7), /at least 2 \(integer\) waypoints/);
 });

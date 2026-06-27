@@ -373,8 +373,10 @@ function* generate(
   random: RandomSource,
   configOverride?: Partial<GeneratorConfig>
 ): Generator<GenerationProgress, GenerationResult, void> {
-  if (count < 2) {
-    throw new RangeError(`A walk needs at least 2 waypoints, got ${count}`);
+  if (!Number.isInteger(count) || count < 2) {
+    // Guard up front so a non-integer/too-small count fails with a clear domain error rather than
+    // an opaque "Invalid array length" thrown later by `new Array(count)` inside placement.
+    throw new RangeError(`A walk needs at least 2 (integer) waypoints, got ${count}`);
   }
   const config: GeneratorConfig = { ...DEFAULT_CONFIG, ...configOverride };
   let attempts = 0;
