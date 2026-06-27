@@ -214,3 +214,16 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - Asserting error message text (e.g. `/diagonal/i`) is strictly tighter than bare `assert.throws(fn)`;
     prefer regex patterns on throw checks when the error message is part of the public contract.
 ---
+
+## 2026-06-27 - US-005 (TurnSequence value object)
+- Implemented TurnSequence value object and RandomSource port interface
+  - `src/domain/random-source.ts`: minimal `RandomSource` interface (`nextFloat(): number`)
+  - `src/domain/turn-sequence.ts`: immutable `TurnSequence` class; `turns: ReadonlyArray<Turn>`; factory `generate(waypointCount, random)` produces exactly `waypointCount - 2` turns; `get(index)` accessor; throws on `waypointCount < 2`
+  - `tests/turn-sequence.test.ts`: 10 tests covering length math (N=10→8, N=90→88, N=2→0), Left/Right mapping (< 0.5 → L, >= 0.5 → R), determinism under a seeded stub, turn validity invariant, immutability, `get()` vs `turns[]` consistency, and error message text
+- All 77 tests pass; typecheck clean
+- **Learnings for future iterations:**
+  - `RandomSource` interface (`nextFloat(): number`) lives in `src/domain/` so it can be referenced by both TurnSequence and the walk-generator without introducing a DOM/Node dependency; US-009 adds the seedable implementation in the adapters layer.
+  - TurnSequence `turns` is `ReadonlyArray<Turn>` — TypeScript enforces immutability at compile time; no need for Object.freeze at runtime in a strict-typed codebase.
+  - Stub a `RandomSource` in tests with a simple closure over a values array cycling via `i++ % values.length` — no external seeding library needed.
+  - The `< 0.5` threshold is the canonical Left/Right split; exact boundary (0.5) maps to Right — document this if it matters for reproducibility.
+---
