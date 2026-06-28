@@ -511,11 +511,28 @@ function ok(label) {
   const legendAt = html.search(/\bid=["']legend["']/i);
   assert.ok(canvasAt !== -1 && legendAt > canvasAt, "legend is below the canvas (after it in document order)");
 
-  // Three entries with their AC labels.
-  for (const label of ["Start / End", "Waypoint", "Wildcard"]) {
-    assert.ok(html.includes(label), `legend has the "${label}" entry`);
+  // Scope the entry checks to the actual <ul id="legend"> ... </ul> markup block — NOT the whole
+  // page. "Waypoint" is a substring of the "Waypoints" control label and "Wildcard" appears in the
+  // "Show Wildcards" toggle, so an unscoped html.includes(label) passes even with the legend <li>
+  // deleted (proven to bite). Pairing each AC swatch class with its AC label INSIDE one <li> proves
+  // the three entries actually exist in the legend, correctly labelled.
+  const legendBlock = html.match(/<ul\b[^>]*\bid=["']legend["'][\s\S]*?<\/ul>/i)?.[0] ?? null;
+  assert.ok(legendBlock, "index.html has a <ul id=legend> ... </ul> block");
+  const entries = legendBlock.match(/<li\b[\s\S]*?<\/li>/gi) ?? [];
+  assert.equal(entries.length, 3, "legend has exactly three entries (AC)");
+  // Each AC entry: the swatch class and its label live together in one <li> (so the swatch is paired
+  // with the right symbol, and the label isn't satisfied by chrome text elsewhere on the page).
+  const acEntries = [
+    { swatch: "swatch-terminal", label: "Start / End" },
+    { swatch: "swatch-waypoint", label: "Waypoint" },
+    { swatch: "swatch-wildcard", label: "Wildcard" },
+  ];
+  for (const { swatch, label } of acEntries) {
+    const entry = entries.find((li) => li.includes(swatch));
+    assert.ok(entry, `legend has an entry with the .${swatch} swatch`);
+    assert.ok(entry.includes(label), `the .${swatch} legend entry is labelled "${label}"`);
   }
-  assert.ok(/walker goes straight/i.test(html), 'wildcard entry explains "walker goes straight"');
+  assert.ok(/walker goes straight/i.test(legendBlock), 'wildcard entry explains "walker goes straight"');
 
   // Swatches mirror the canvas (canvas-renderer.ts): terminal black fill; waypoint white fill + black
   // border; wildcard orange ring. Golden hex values hard-coded.

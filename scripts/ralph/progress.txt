@@ -317,6 +317,14 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   carries all three AC labels, and its swatch CSS has the golden hex colours — golden values HARD-CODED
   (not imported) so a drift in EITHER the legend CSS or the renderer constants fails the gate. US-019's
   print stylesheet must KEEP #legend visible while hiding the other chrome (controls/overlay/tooltip).
+  GOTCHA (US-018 refinement): when asserting a label is present in a SPECIFIC DOM region, SCOPE the
+  search to that region's markup block, not the whole HTML — a label can be a substring of unrelated
+  chrome text and satisfy an unscoped `html.includes(label)` vacuously ("Waypoint" is a substring of
+  the "Waypoints" input label; "Wildcard" of the "Show Wildcards" toggle), so the legend's
+  Waypoint/Wildcard <li> could be DELETED and the gate stay green (proven to bite). Fix: extract
+  `<ul id="legend">…</ul>` via `html.match(/<ul\b[^>]*\bid=["']legend["'][\s\S]*?<\/ul>/i)[0]`, split
+  its `<li>`s, assert EXACTLY three (the AC count), and pair each AC swatch CLASS with its label
+  INSIDE one <li> — proving the swatch sits on the right entry, not merely that the class exists in CSS.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1690,4 +1698,31 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - LIVE browser screenshot for human sign-off still pending (no MCP); the legend renders independently
     of the JS (it's static markup), so it shows even before US-021 wires main.ts. US-019 (print
     stylesheet) must KEEP #legend on the printed page while hiding controls/overlay/tooltip.
+---
+
+## 2026-06-28 - US-018 (Legend) — REFINEMENT 2
+- US-018 already passed; re-verified all ACs green and HARDENED the one regression gate that guards it.
+- The legend's only automated guard is verify:controls' index.html-markup block (item 6). Found a real
+  blind spot: it checked the three AC entries with `html.includes(label)` against the WHOLE page, but
+  "Waypoint" is a substring of the "Waypoints" control input label and "Wildcard" of the "Show
+  Wildcards" toggle — so those two checks passed VACUOUSLY. PROVEN: deleting the entire `<li>` for the
+  Waypoint legend entry (leaving only its CSS rule) kept the gate GREEN ("three entries... passed").
+- Fix (verify:controls only — no impl change; the legend markup/CSS was already correct): scope the
+  entry checks to the actual `<ul id="legend">…</ul>` block extracted from the real index.html, assert
+  EXACTLY three `<li>` entries (the AC count), and pair each AC swatch CLASS with its label INSIDE one
+  `<li>` (swatch-terminal↔"Start / End", swatch-waypoint↔"Waypoint", swatch-wildcard↔"Wildcard"), plus
+  "walker goes straight" scoped to the legend block. This proves each swatch sits on the correctly
+  labelled entry, not merely that the class exists in the CSS or the word appears somewhere on the page.
+- Files changed: scripts/verify-controls.mjs (item-6 legend block hardened); scripts/ralph/progress.txt
+  (this entry + a new Codebase-Patterns gotcha about scoping region-label assertions). No change to
+  index.html (the legend was correct) or any src/ file.
+- Verified: `npm run clean` + tsc -b clean (typecheck); `npm test` 243 pass (no regressions); verify:renderer
+  green; verify:controls 23/23. PROVEN the hardened gate bites: deleting the Waypoint `<li>` now fails
+  "legend has exactly three entries (AC)" and the node process exits 1 (was a silent pass); restored → 0/23→23.
+- **Learnings for future iterations:**
+  - A whole-page `html.includes(label)` is a WEAK presence check when the label is a substring of other
+    chrome ("Waypoint" ⊂ "Waypoints"). Scope to the owning element's markup block and pair swatch↔label
+    inside one entry. Same lesson applies to any future static-markup AC gate (US-019 print stylesheet).
+  - The legend markup itself needed no change across refinements — it was correct from US-018's first
+    pass; the value of the refinement passes has been tightening the gate that protects it.
 ---
