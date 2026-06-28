@@ -46,6 +46,17 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
     NOT downscale) and asserts the derived scale is still the A4 cap — proven to bite (drop the `Math.min`
     → harness fails on the larger-canvas check while every A4-sized check still passes). `makeFakeContext`/
     `renderToOps` take optional `(canvasW, canvasH)` for this; default to A4.
+  - The `s = min(1, A4_W/contentW, A4_H/contentH)` downscale must hold whichever axis BINDS, but a walk's
+    bounding box has ONE aspect — so a single downscale seed only ever exercises ONE binding axis. The
+    big default walk (count=90 seed=4242) is WIDTH-bound, so for a long time the `A4_H/contentH` term was
+    never the active constraint: a regression to `s = min(1, A4_W/contentW)` (dropping the height term)
+    passed everything yet overflowed A4 vertically on a tall walk. `verify:renderer` now ALSO runs a
+    HEIGHT-bound downscale (count=30 seed=17: width 652px fits A4, height 1278px overflows → only the
+    height term forces the scale), `verifyA4Fit` asserts the binding axis fills its A4 edge EXACTLY
+    (`contentDim*s === A4 dim`), and a coverage gate asserts the downscale cases span BOTH "WIDTH" and
+    "HEIGHT" binds so the height case can't be silently dropped. Lesson: an aspect-driven `min(...)` needs
+    a fixture per binding term, or the un-exercised term rots. Proven to bite (width-only scale → the
+    height-bound case fails on the A4-fit-formula check; every width-bound check still passes).
 - **Viewport fit (AC4) is CSS, not a Canvas transform** — it lives in `index.html`
   (`canvas { max-width: 100%; height: auto }`). The backing store stays A4 (794×1123); only the
   displayed element shrinks on a narrow viewport, preserving aspect ratio (no horizontal scroll).

@@ -341,7 +341,13 @@ function verifyA4Fit(count, seed) {
 
   // The AC scale: fit within A4, clamped to ≤ 1 (small walks are never enlarged).
   const fits = contentW <= A4_W && contentH <= A4_H;
-  const expectedScale = Math.min(1, A4_W / contentW, A4_H / contentH);
+  const sW = A4_W / contentW, sH = A4_H / contentH;
+  const expectedScale = Math.min(1, sW, sH);
+  // Which dimension forces the downscale (the smaller per-axis fit ratio binds). "none" when it fits.
+  // The "uniformly scaled down to fit A4" AC must hold whichever axis binds; the call site below
+  // asserts the gate exercises BOTH a width-bound and a height-bound downscale (a width-only
+  // regression — dropping the A4_H/contentH term — is invisible until a height-bound walk is tested).
+  const bind = fits ? "none" : sW < sH ? "WIDTH" : "HEIGHT";
 
   // Waypoint circles carry both local (lx/ly) and screen (x/y) coordinates — the transform fingerprint.
   const circles = ops.filter((o) => o.op === "arc" && o.r === WAYPOINT_RADIUS);
@@ -389,11 +395,19 @@ function verifyA4Fit(count, seed) {
   assert.ok(Math.abs(boxLeft - (A4_W - boxRight)) < 1e-6, "content is centred horizontally (equal L/R margins)");
   assert.ok(Math.abs(boxTop - (A4_H - boxBottom)) < 1e-6, "content is centred vertically (equal T/B margins)");
 
+  // The binding axis is filled EXACTLY to the A4 edge — the sharpest proof that the correct term drove
+  // the scale. A width-bound downscale must make the scaled content width === A4 width; a height-bound
+  // one must make the scaled height === A4 height. This is what a "width-only" scale regression breaks
+  // on a HEIGHT-bound walk: it would leave the scaled height OVER A4_H (overflowing) rather than ON it.
+  if (bind === "WIDTH") assert.ok(Math.abs(contentW * expectedScale - A4_W) < 1e-6, `width-bound: scaled width fills A4 width exactly (${(contentW * expectedScale).toFixed(2)} === ${A4_W})`);
+  if (bind === "HEIGHT") assert.ok(Math.abs(contentH * expectedScale - A4_H) < 1e-6, `height-bound: scaled height fills A4 height exactly (${(contentH * expectedScale).toFixed(2)} === ${A4_H})`);
+
   // The background still covers the whole canvas in screen space (drawn under the identity reset).
   const bg = ops.find((o) => o.op === "fillRect");
   assert.ok(bg && bg.x === 0 && bg.y === 0 && bg.w === A4_W && bg.h === A4_H, "background still covers the full A4 canvas");
 
-  console.log(`  ✓ count=${count} seed=${seed}: scale=${derivedScale.toFixed(4)} (${fits ? "within A4, not enlarged" : "downscaled to fit A4"}), centred, domain coords untouched`);
+  console.log(`  ✓ count=${count} seed=${seed}: scale=${derivedScale.toFixed(4)} (${fits ? "within A4, not enlarged" : `downscaled to fit A4, ${bind}-bound`}), centred, domain coords untouched`);
+  return { count, seed, scale: derivedScale, bind };
 }
 
 /**
@@ -493,11 +507,24 @@ verifyTurnsAndWildcards(20, 99);
 verifyTurnsAndWildcards(90, 4242);
 
 console.log("US-015 A4 cap / uniform downscale / auto-centre:");
-// count=2 + a small count fit within A4 (scale === 1, not enlarged); count=90 exceeds A4 (downscaled).
-verifyA4Fit(2, 7);
-verifyA4Fit(10, 4242);
-verifyA4Fit(20, 99);
-verifyA4Fit(90, 4242);
+// count=2 + small counts fit within A4 (scale === 1, not enlarged); the larger counts exceed A4 and
+// downscale. The "uniformly scaled to FIT A4" AC must hold whichever axis is the binding constraint, so
+// we deliberately cover BOTH: count=90/4242 is WIDTH-bound, count=30/17 is HEIGHT-bound (its 652px width
+// fits A4 at natural size, but its 1278px height overflows, so ONLY the height term forces the scale —
+// a regression dropping A4_H/contentH would leave it at scale 1 and overflow A4 vertically here).
+const fitResults = [
+  verifyA4Fit(2, 7),
+  verifyA4Fit(10, 4242),
+  verifyA4Fit(20, 99),
+  verifyA4Fit(30, 17), // HEIGHT-bound downscale (width fits A4 at natural size)
+  verifyA4Fit(90, 4242), // WIDTH-bound downscale
+];
+// Coverage gate: the downscale cases above must include BOTH a width-bound and a height-bound walk, so
+// a future edit that removed (say) the height-bound seed — re-opening the width-only blind spot — fails.
+const downscaleBinds = new Set(fitResults.filter((r) => r.scale < 1 - 1e-9).map((r) => r.bind));
+assert.ok(downscaleBinds.has("WIDTH"), "a WIDTH-bound downscale case is exercised");
+assert.ok(downscaleBinds.has("HEIGHT"), "a HEIGHT-bound downscale case is exercised");
+console.log(`  ✓ downscale coverage spans both binding axes: ${[...downscaleBinds].sort().join(" + ")}`);
 
 console.log("US-015 A4 cap holds on a canvas LARGER than A4 (cap is A4, not the canvas):");
 // count=90 exceeds A4, so the A4 cap downscales even though the walk would fit the larger canvas at 1:1.

@@ -188,6 +188,15 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   content box still lands ≤ A4. Always PROVE a new gate bites (temporarily regress, watch it fail, then
   revert) — and `npm run clean` after the revert: `tsc -b` incremental may keep stale `dist/` if the
   restored file's mtime is older than `.tsbuildinfo`.
+- An aspect-driven `min(...)` (e.g. US-015's `scale = min(1, A4_W/contentW, A4_H/contentH)`) needs a
+  test FIXTURE PER BINDING TERM, or the un-exercised term rots silently. A walk's bbox has ONE aspect,
+  so a single seed only ever makes ONE axis the active constraint: count=90/4242 is WIDTH-bound, so for
+  a long time the `A4_H/contentH` term was never binding and a width-only regression passed every check
+  while overflowing A4 vertically. verify:renderer now also runs a HEIGHT-bound downscale (count=30/17:
+  width 652 fits A4, height 1278 overflows → only height forces the scale), verifyA4Fit asserts the
+  binding axis fills its A4 edge EXACTLY (`contentDim*scale === A4 dim`) and returns its `bind`, and a
+  coverage gate asserts the downscale set spans BOTH "WIDTH" and "HEIGHT". To find a height-bound large
+  walk: scan seeds for `contentH/contentW > A4_H/A4_W` (1123/794 ≈ 1.414).
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1241,4 +1250,38 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     variable, like the bounds-growth A/B used for the generator.
   - After reverting a file via `mv`/`cp` whose mtime is older than `.tsbuildinfo`, `tsc -b` may skip
     recompiling it — run `npm run clean` before re-checking, or you verify against stale `dist/`.
+---
+
+## 2026-06-28 01:49 BST - US-015 (A4 cap, uniform downscale, auto-centre, viewport fit) — REFINEMENT
+- US-015 already passed; re-verified all acceptance criteria green end to end (typecheck clean; npm test
+  243 pass; npm run verify:renderer all assertions pass). ADR-0005 re-read — implementation faithful
+  (single generation-space coord system; A4 cap + uniform downscale + auto-centre are pure renderer
+  transforms; viewport fit is CSS in index.html; dense sub-nominal spacing for big walks is intended).
+- Refinement (verify harness only, NO impl change): closed the binding-AXIS coverage gap. The downscale
+  scale is `min(1, A4_W/contentW, A4_H/contentH)` but a walk's bbox has ONE aspect, so a single seed
+  only ever makes ONE term the active constraint. Discovered the harness's sole downscale case
+  (count=90/4242) is WIDTH-bound (A4_W/cW=0.5604 < A4_H/cH=0.5874) — so the `A4_H/contentH` term was
+  NEVER the binding constraint in any test. A regression to `scale = min(1, A4_W/contentW)` (dropping the
+  height term) passed every prior assertion yet would overflow A4 vertically on a tall walk.
+  - Added a HEIGHT-bound downscale case: count=30 seed=17 (cW=652 fits A4 width at natural size, cH=1278
+    overflows A4 height → ONLY the height term forces scale=0.8787). Found by scanning seeds for
+    contentH/contentW > A4_H/A4_W (≈1.414).
+  - `verifyA4Fit` now computes the binding axis, asserts the binding axis fills its A4 edge EXACTLY
+    (`contentDim*scale === A4 dim`; width-bound → width === 794, height-bound → height === 1123), logs
+    `WIDTH`/`HEIGHT`-bound, and returns `{count, seed, scale, bind}`.
+  - Coverage gate at the call site: the downscale results must span BOTH "WIDTH" and "HEIGHT" binds, so a
+    future edit removing the height-bound seed (re-opening the blind spot) fails loudly.
+  - PROVEN TO BITE: temporarily set `scale = min(1, capW/contentW)` in canvas-renderer.ts → the
+    height-bound case (count=30/17) failed on `scale 1 matches the A4-fit formula 0.8787` while every
+    WIDTH-bound check still passed; reverted and `npm run clean`-rebuilt.
+- Files changed: scripts/verify-renderer.mjs (height-bound case + binding-axis assertions + coverage
+  gate), src/adapters/CLAUDE.md (binding-axis-coverage learning), scripts/ralph/progress.txt (this entry
+  + a Codebase Patterns bullet). No change to canvas-renderer.ts or index.html (impl already correct).
+- **Learnings for future iterations:**
+  - An aspect-driven `min(termA, termB, ...)` needs a FIXTURE PER TERM or the un-exercised term rots —
+    a single fixture's fixed aspect can only ever make one term bind. US-017 hit-test inversion will
+    likewise only see one binding axis per walk; test both width- and height-bound walks there too.
+  - count=30 seed=17 is the canonical HEIGHT-bound downscale fixture; count=90 seed=4242 is WIDTH-bound.
+  - The binding axis is filled EXACTLY to its A4 edge after the fit (`contentDim*scale === A4 dim`) — the
+    sharpest single assertion that the correct term drove the uniform scale.
 ---
