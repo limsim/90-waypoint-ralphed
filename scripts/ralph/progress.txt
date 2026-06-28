@@ -1137,3 +1137,27 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     sign-off (no browser/Playwright MCP in this env); qlmanage rasterization of the real draw-calls
     stands in, easiest to capture once US-016/US-021 wire main.ts.
 ---
+
+## 2026-06-28 - US-014 (Canvas renderer - turn labels and wildcard rings) — REFINEMENT
+- US-014 already passed; all acceptance criteria re-verified green end to end (tsc -b clean; npm test
+  243 pass; npm run verify:renderer passes for counts 2/10/20/90 across all 4 toggle combos).
+- Refinement (verify harness only, no impl change): closed the count=2 ALL-TERMINAL boundary gap. The
+  US-014 gate `verifyTurnsAndWildcards` requires `wildcards.length > 0` AND `labelled.length > 0`, so it
+  can NEVER run for count=2 (where every waypoint is terminal — 0 interior labels, 0 wildcards). That
+  made the degenerate "first and last waypoints show no label" case the only AC-1 boundary never
+  asserted: verifyDraw(2,...) only checked the waypoint-NUMBER count, never the decoration count.
+  Added to verifyDraw (which renders with BOTH toggles on) a cross-check that turn-label ops ===
+  interior-labelled count and ring ops === wildcard count — for count=2 BOTH are 0, directly proving the
+  all-terminal walk draws no L/R/W labels and no rings. For 10/20/90 it doubles as an independent
+  cross-check that verifyDraw's own render agrees with verifyTurnsAndWildcards's separate renders.
+  Output line now reports `… N numbers, K labels, R rings` (count=2 → 0 labels, 0 rings).
+- Files changed: scripts/verify-renderer.mjs (verifyDraw decoration-count cross-check + log line).
+- **Learnings for future iterations:**
+  - The count=2 walk is the ONLY all-terminal walk (both waypoints terminal, no interior, no wildcards),
+    so it is the purest test of any "terminals show no <decoration>" AC. Gates that require >=1 of a
+    feature to run (like verifyTurnsAndWildcards) structurally exclude it — assert the ZERO case in the
+    base/US-013 path (verifyDraw) instead, where count=2 is already exercised.
+  - verifyDraw renders with the default `{showWildcards:true, showTurns:true}`, so it is the right place
+    to cross-check decoration COUNTS against the walk for every count in one render; verifyTurnsAndWildcards
+    then specialises in the per-toggle independence + per-waypoint geometry for the wildcard-bearing counts.
+---

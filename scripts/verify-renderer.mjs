@@ -209,7 +209,17 @@ function verifyDraw(count, seed) {
   assert.equal(blackTerminals, 2, "exactly two black terminals");
   assert.ok(walk.waypoints[0].isTerminal && walk.waypoints[n - 1].isTerminal, "the terminals are the first and last waypoints");
 
-  console.log(`  ✓ count=${count} seed=${seed}: ${n} waypoints, ${circles.length} circles, ${verticals.length}×${horizontals.length} grid, ${texts.length} numbers`);
+  // US-014 boundary cross-check: with BOTH toggles on (renderToOps default), the number of turn
+  // labels equals the interior (labelled) waypoint count and the number of rings equals the wildcard
+  // count. For count=2 BOTH are zero — every waypoint is terminal — which is the purest verification
+  // of "first and last waypoints show no label". verifyTurnsAndWildcards requires >=1 label AND >=1
+  // ring, so it can NEVER cover the all-terminal walk; this is the only place that does.
+  const expectedLabels = walk.waypoints.filter((wp) => expectedLabel(wp) !== null).length;
+  const expectedRings = walk.waypoints.filter((wp) => wp.wildcard).length;
+  assert.equal(turnLabelOps(ops).length, expectedLabels, `${expectedLabels} turn labels with both toggles on`);
+  assert.equal(ringArcOps(ops).length, expectedRings, `${expectedRings} wildcard rings with both toggles on`);
+
+  console.log(`  ✓ count=${count} seed=${seed}: ${n} waypoints, ${circles.length} circles, ${verticals.length}×${horizontals.length} grid, ${texts.length} numbers, ${expectedLabels} labels, ${expectedRings} rings`);
 }
 
 /**
