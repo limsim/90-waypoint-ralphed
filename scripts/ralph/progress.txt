@@ -1096,3 +1096,44 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - The 2×2 toggle-combination sweep is the right shape for proving two independent display flags:
     assert "feature present iff flag" for each, and that the shared base layer is invariant under both.
 ---
+
+## 2026-06-28 - US-014 (Canvas renderer - turn labels and wildcard rings) — REFINEMENT
+- US-014 already passed; re-verified all 5 acceptance criteria green (tsc -b clean; npm test 243 pass;
+  npm run verify:renderer passes for counts 10/20/90 across all 4 toggle combos). No impl change needed
+  — src/adapters/canvas-renderer.ts (rings-then-labels passes, showWildcards/showTurns independent,
+  turnLabelText, turnLabelPoint imported from layout-rules) remains correct.
+- Refinement (gate only, no impl change): closed the ONE untested half of AC1's geometry clause —
+  "label drawn at the fixed NE (45°) position, 46px from the waypoint centre". The verify-renderer
+  harness LOCATES each label op via `turnLabelPoint(wp.position)`, the SAME function the renderer calls,
+  so a regression in `turnLabelPoint`'s geometry would move BOTH the drawn position and the harness's
+  expected position identically — the `o.lx === lp.x` match still succeeds and nothing fails. Nothing
+  anywhere (no test under tests/, no harness assertion) verified the literal NE/46px/45° property from
+  the renderer's actual output. Added an INDEPENDENT geometric assertion in `verifyTurnsAndWildcards`:
+  derive `dx = labelOp.lx - wp.position.x`, `dy = labelOp.ly - wp.position.y` from the RECORDED op and
+  the RAW centre, then assert `hypot(dx,dy)===46` (within 1e-9), `dx>0 && dy<0` (NE; y grows downward),
+  and `dx===-dy` (45°). Proven to bite: temporarily setting the golden offset to 45 fails with
+  "wp2 label is 45px from the centre"; reverted. Also added a one-time golden invariant
+  `RING_RADIUS > WAYPOINT_RADIUS` for AC2's "radius 30px OUTSIDE the centre" (ring clears the r=25
+  circle). Golden AC literals (46, 30, #ff8c00) are hard-coded in the harness, NOT imported from the
+  domain, so a drift in the source constants fails the gate rather than being silently agreed with.
+- Files changed:
+  - scripts/verify-renderer.mjs (+18 lines: TURN_LABEL_OFFSET golden const, ring-outside-circle
+    invariant, per-label independent NE/46px/45° geometry assertion)
+  - src/adapters/CLAUDE.md (note: locate-via-turnLabelPoint can't catch its own geometry regression,
+    so assert geometry independently from recorded coords; keep AC golden values hard-coded in the gate)
+- **Learnings for future iterations:**
+  - When a headless harness LOCATES an op using the same function the production code used to PRODUCE
+    it (here `turnLabelPoint`), the match is tautological for that function's correctness — both sides
+    move together. To actually gate the geometry, assert the property from the RAW recorded coordinates
+    (op.lx/ly) against an INDEPENDENT reference (the waypoint centre), using AC golden literals
+    hard-coded in the harness, never imported from the module under test. This generalises to US-015's
+    A4/scale transform: assert the scaled positions from first principles, don't re-derive them with
+    the same transform the renderer used.
+  - The NE 45° label offset is bit-stable enough for a 1e-9 tolerance: `Math.cos(π/4)` and
+    `Math.sin(π/4)` differ by ~1 ULP in V8, so `dx+dy` and `hypot−46` land around 1e-15, far inside 1e-9.
+  - A DOM adapter's geometry can still be gated headlessly with zero browser: drive the compiled
+    renderer with a recording fake ctx, then check the emitted coordinates against first-principles AC
+    values. CAVEAT unchanged from US-013/US-014: a LIVE browser screenshot is still pending human
+    sign-off (no browser/Playwright MCP in this env); qlmanage rasterization of the real draw-calls
+    stands in, easiest to capture once US-016/US-021 wire main.ts.
+---

@@ -26,12 +26,20 @@ const CELL = 60; // grid cell, generation-space px
 const PAD = 100; // padding around the waypoint bounding box, each side
 
 // US-014 AC values (the renderer's wildcard ring + turn label, asserted as a golden gate).
+// These are GOLDEN literals straight from the acceptance criteria — deliberately NOT imported from
+// the domain, so a drift in the source constants is caught here rather than silently agreed with.
 const RING_RADIUS = 30; // orange wildcard ring, radius px from centre
 const RING_WIDTH = 3; // orange wildcard ring stroke width
 const RING_COLOUR = "#ff8c00"; // orange
+const TURN_LABEL_OFFSET = 46; // NE label distance from the waypoint centre (AC: "46px from the centre")
 const TURN_LABEL_COLOUR = "#222222"; // L / R / W ink
 const TURN_LABEL_FONT = "bold 16px Arial";
 const TURN_LABELS = new Set(["L", "R", "W"]);
+
+// AC: the wildcard ring is drawn "at radius 30px OUTSIDE the centre" — i.e. it sits clear of the
+// waypoint circle (radius 25). A one-time golden invariant so a future tweak that shrank the ring
+// inside the circle (or grew the circle past it) is caught immediately.
+assert.ok(RING_RADIUS > WAYPOINT_RADIUS, "wildcard ring radius sits outside the waypoint circle");
 
 /**
  * A recording fake `CanvasRenderingContext2D`. Every op is pushed with a snapshot of the styles
@@ -236,6 +244,16 @@ function verifyTurnsAndWildcards(count, seed) {
     assert.equal(hit[0].font, TURN_LABEL_FONT, `wp${wp.sequenceNumber} turn label font`);
     assert.equal(hit[0].textAlign, "center", `wp${wp.sequenceNumber} turn label centred (align)`);
     assert.equal(hit[0].textBaseline, "middle", `wp${wp.sequenceNumber} turn label centred (baseline)`);
+    // AC geometry, verified INDEPENDENTLY of turnLabelPoint: the offset from the RECORDED label op to
+    // the RAW waypoint centre must be the fixed NE (45°) direction, exactly 46px out. The label is
+    // LOCATED via turnLabelPoint (which the renderer and harness share, so the match always succeeds),
+    // but this check reads the op's own coordinates — so a regression in turnLabelPoint's geometry
+    // (wrong distance, wrong quadrant, off 45°) is caught here even though both sides moved together.
+    const dx = hit[0].lx - wp.position.x;
+    const dy = hit[0].ly - wp.position.y;
+    assert.ok(Math.abs(Math.hypot(dx, dy) - TURN_LABEL_OFFSET) < 1e-9, `wp${wp.sequenceNumber} label is ${TURN_LABEL_OFFSET}px from the centre`);
+    assert.ok(dx > 0 && dy < 0, `wp${wp.sequenceNumber} label is to the NE (east + up; y grows downward)`);
+    assert.ok(Math.abs(dx + dy) < 1e-9, `wp${wp.sequenceNumber} label is at 45° (dx === -dy)`);
   }
   // Every wildcard's label is specifically "W" (it is governed by Show Turns, not Show Wildcards).
   for (const wp of wildcards) {

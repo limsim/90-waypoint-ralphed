@@ -58,3 +58,10 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   US-013 "n numbers" count filters them out with `!TURN_LABELS.has(text)` (waypoint numbers are
   numeric, never L/R/W). When US-015 adds scaling, the ring radius / label offset are generation-space
   px that the US-015 transform scales along with everything else (no special-casing).
+- GOTCHA when verifying the label POSITION: the harness LOCATES each label op via `turnLabelPoint`
+  (shared with the renderer), so a match alone can't catch a regression in `turnLabelPoint`'s geometry
+  — both sides move together and still agree. The gate therefore ALSO asserts the AC geometry
+  INDEPENDENTLY from the recorded op's own coords vs the RAW waypoint centre: offset is NE (`dx>0`,
+  `dy<0` — y grows downward), exactly 46px (`hypot≈46`), at 45° (`dx===-dy`). AC golden values
+  (46px offset, r=30 ring, `#ff8c00`) are HARD-CODED in the harness, NOT imported from the domain, so
+  a drift in the source constants fails the gate instead of being silently agreed with.
