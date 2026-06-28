@@ -120,6 +120,37 @@ test("every non-adjacent waypoint pair keeps the 70px min gap, across seeds and 
   }
 });
 
+test("adjacent waypoints may sit below the 70px floor — the exemption is load-bearing", () => {
+  // The 70px min-gap applies ONLY to non-adjacent pairs (ADR-0007); adjacent (consecutive)
+  // waypoints are joined by a 60-140px segment and are EXEMPT. This proves the exemption is
+  // exercised end-to-end by real generation, not just on the hand-built fixtures in
+  // layout-rules.test.ts: across the same matrix the generator legitimately places some adjacent
+  // pairs in the exempt zone (< 70px, down to the 60px segment floor). Because `expectWalk` proves
+  // Walk.create ACCEPTED each walk, the invariant exempts those close adjacent pairs too — a 70px
+  // floor wrongly applied to adjacent pairs would force generation away from short segments (min
+  // adjacent distance 60 -> 70, count below 70 -> 0), which this assertion catches and which the
+  // non-adjacent test above (it only checks j >= i+2) is blind to.
+  const MIN = 2 * WAYPOINT_RADIUS + MIN_WAYPOINT_GAP; // 70
+  let closeAdjacentPairs = 0;
+  for (const count of [10, 25, 60, 90]) {
+    for (const seed of [1, 4242, 99]) {
+      const wps = expectWalk(drive(count, seed)).waypoints;
+      for (let i = 0; i + 1 < wps.length; i++) {
+        const d = Math.hypot(
+          wps[i + 1].position.x - wps[i].position.x,
+          wps[i + 1].position.y - wps[i].position.y
+        );
+        if (d < MIN) closeAdjacentPairs++;
+      }
+    }
+  }
+  assert.ok(
+    closeAdjacentPairs > 0,
+    `expected the generator to place some adjacent waypoints below ${MIN}px (the exempt zone), ` +
+      `proving the adjacent-pair exemption is exercised by real walks; found ${closeAdjacentPairs}`
+  );
+});
+
 // ---- determinism ----
 
 test("a fixed seed reproduces an identical Walk", () => {

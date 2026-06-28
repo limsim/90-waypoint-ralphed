@@ -40,6 +40,14 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   tests — but isolate the new rule's own fixture (assert `v.length===1` / overlap NOT also tripped).
   US-023 folded the non-adjacent 70px floor into the existing 50px circle loop: adjacent predecessor
   (`j===idx-1`) keeps 50px, non-adjacent priors get `2*WAYPOINT_RADIUS+MIN_WAYPOINT_GAP` (70px).
+- An EXEMPTION clause (US-023's "adjacent pairs are exempt", a falsy sentinel, an aspect-`min` binding
+  term) needs a test that the exempt case ACTUALLY OCCURS in real output, not just a fixture proving
+  the predicate exempts it. A regression that TIGHTENS the rule onto the exempt case is a pure
+  over-constraint: output stays valid, no crash, every "is-valid / meets-the-floor" assertion still
+  passes — only an assertion that the exempt zone is EXERCISED catches it (US-023: assert generated
+  walks place SOME adjacent pair <70px; reverting the generator exemption pushes min-adjacent 60->70
+  and the <70 count 46->0/543, failing it while all prior tests stayed green). Same rot lesson as the
+  `?seed=0` falsy sentinel and the aspect-`min(...)` per-binding-term fixtures.
 - `Walk.create(waypoints, bounds)` (src/domain/walk.ts) DERIVES segments from consecutive waypoints
   (`new Segment(wps[i].position, wps[i+1].position)`) — callers (US-010 generator) pass ONLY the placed
   waypoints + the generation region, never a separate segments array. This makes the layout-rules
@@ -2511,4 +2519,41 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - For an isolated new-rule fixture: keep all SEGMENTS clear of non-adjacent waypoints (>=35px) and
     the close pair >=50px (so only the new 70px rule fires, not overlap/segment-clearance). A U-shape
     folding its far end back near WP1 is a clean generator-shaped fixture for the Walk.create throw.
+---
+
+## 2026-06-28 - US-023 (Minimum gap between non-adjacent waypoints) — REFINEMENT
+- US-023 already passed; re-verified all 7 acceptance criteria green end to end and added one test
+  closing the last untested AC clause (the adjacent-pair exemption, end-to-end in the generator).
+- Re-verification:
+  - layout-rules exports MIN_WAYPOINT_GAP=20 + nonAdjacentWaypointsKeepMinGap (70px floor, adjacent
+    j-i===1 exempt); checkLayout pushes {rule:"non-adjacent-waypoints-too-close"}; Walk.create throws.
+  - walk-generator newWaypointConflicts (1) uses `j===idx-1 ? 50 : 70` so the one adjacent predecessor
+    keeps the overlap floor and every non-adjacent prior gets the min-gap; flows through canExtend.
+  - ADR-0007 present and ADR-0005 carries the qualifier ("touching is not 'intended density'").
+  - npm run clean + typecheck clean; npm test 264->265 pass; verify:renderer / verify:controls (34) /
+    verify:main (14) all green.
+- Refinement made (test only, no impl change): tests/walk-generator.test.ts +1 (now 27 walk-generator,
+  265 total). New test "adjacent waypoints may sit below the 70px floor — the exemption is load-bearing"
+  drives the SAME matrix as the non-adjacent test (counts 10/25/60/90 x seeds 1/4242/99) and asserts the
+  generator places SOME adjacent pair below 70px (the exempt zone). Why it matters: the exemption was
+  only tested on hand-built fixtures in layout-rules.test.ts; the generator test only checked NON-adjacent
+  pairs (j>=i+2), so a 70px floor wrongly applied to adjacent pairs in the GENERATOR was invisible to the
+  suite. Since expectWalk proves Walk.create accepted each walk, this also proves the invariant exempts
+  those close adjacent pairs end-to-end.
+- Files changed: tests/walk-generator.test.ts (+1 test), scripts/ralph/prd.json (refinement note),
+  scripts/ralph/progress.txt (this entry).
+- **Learnings for future iterations:**
+  - PROVED-TO-BITE: removing the generator's adjacent exemption (`j===idx-1 ? 2*WAYPOINT_RADIUS :
+    2*WAYPOINT_RADIUS+MIN_WAYPOINT_GAP` -> always the +GAP form) keeps generation SUCCESSFUL but pushes
+    min adjacent distance 60->70 and the count of adjacent pairs <70px from 46 to 0 of 543 across the
+    test matrix. A pure over-constraint like this (no crash, walks still valid) slips past every
+    "walk is valid / non-adjacent >= 70" assertion — only a test that asserts the exempt zone is
+     EXERCISED catches it. General lesson: an EXEMPTION clause needs a test that the exempt case really
+    occurs in real output, or a regression that tightens it silently passes (cf. the FALSY-sentinel /
+    aspect-min per-binding-term rot lessons).
+  - To empirically probe generator geometry during a refinement, import the COMPILED
+    dist/src/domain/*.js from a throwaway .mjs with ABSOLUTE paths (a /tmp/*.mjs resolves bare
+    "./dist/..." against /tmp, not the repo — use the full repo path or `await import(`${absBase}/x.js`)`).
+  - For a temporary proof-of-bite on an uncommitted source file, `cp src/...ts /tmp/backup.ts` then
+    restore with `cp` (NOT `git checkout`, which would wipe other uncommitted story work) + `npm run clean`.
 ---
