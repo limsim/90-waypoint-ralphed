@@ -17,3 +17,6 @@ generative art print).
 - The tooltip "cumulative distance" is reported in **generation-space px** (true summed segment
   lengths), stable across window resizes — not rendered pixels. Label it neutrally.
 - Hit-testing must invert **both** transforms (viewport → A4 → generation) in the canvas adapter.
+
+> Qualified by ADR-0007: non-adjacent waypoint circles keep a minimum generation-space gap —
+> touching is not "intended density".
