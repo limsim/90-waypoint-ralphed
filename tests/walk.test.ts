@@ -190,7 +190,23 @@ test("Walk.create: non-adjacent waypoints closer than 70px throw (rule 7, ADR-00
     [400, 360],
     [148, 360],
   ]);
-  assert.throws(() => Walk.create(wps, ROOM), /non-adjacent-waypoints-too-close/);
+  // Assert the SOLE violation — not just that the rule name is a substring of the message.
+  // `assert.throws(fn, /rule/)` only proves the rule is AMONG the violations; if this fixture ever
+  // started tripping a second rule (a geometry/threshold drift) the regex would still pass and the
+  // "only the new min-gap rule fires" claim above would rot silently. Parsing the rule list and
+  // asserting it is exactly [non-adjacent-waypoints-too-close] makes that isolation load-bearing,
+  // mirroring the checkLayout-level isolation test in tests/layout-rules.test.ts.
+  assert.throws(
+    () => Walk.create(wps, ROOM),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      const prefix = "Invalid Walk layout: ";
+      assert.ok(err.message.startsWith(prefix), `unexpected error: ${err.message}`);
+      const rules = err.message.slice(prefix.length).split(", ");
+      assert.deepEqual(rules, ["non-adjacent-waypoints-too-close"]);
+      return true;
+    }
+  );
 });
 
 test("Walk.create: a waypoint outside the bounds (30px padding) throws (rule 6)", () => {

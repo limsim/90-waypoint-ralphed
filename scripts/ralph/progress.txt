@@ -38,6 +38,14 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   a precise Edit + `npm run clean`. `assert.throws(fn, /rule-name/)` matches a SUBSTRING of the joined
   violation message, so a fixture that ALSO trips the new rule does NOT break existing per-rule throw
   tests — but isolate the new rule's own fixture (assert `v.length===1` / overlap NOT also tripped).
+  This cuts BOTH ways: a per-rule `Walk.create` throw test whose fixture is MEANT to isolate one rule
+  but only `/rule/`-matches the message rots silently if the fixture later drifts into tripping a 2nd
+  rule (the name is still a substring → still green). To make an aggregate-level isolation claim
+  load-bearing, parse the rule list off the message (Walk.create throws `Invalid Walk layout: <rule>,
+  <rule>, ...`) and `deepEqual` it to the single expected rule — NOT a regex. Proven to bite by nudging
+  US-023's rule-7 U-shape to (120,360): still orthogonal, 44.7px from WP1, trips 4 rules; the regex
+  passes, the deepEqual fails. (The checkLayout-level test already did `!v.some(overlap)`; this mirrors
+  that at the Walk aggregate.)
   US-023 folded the non-adjacent 70px floor into the existing 50px circle loop: adjacent predecessor
   (`j===idx-1`) keeps 50px, non-adjacent priors get `2*WAYPOINT_RADIUS+MIN_WAYPOINT_GAP` (70px).
 - An EXEMPTION clause (US-023's "adjacent pairs are exempt", a falsy sentinel, an aspect-`min` binding
@@ -2556,4 +2564,42 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     "./dist/..." against /tmp, not the repo — use the full repo path or `await import(`${absBase}/x.js`)`).
   - For a temporary proof-of-bite on an uncommitted source file, `cp src/...ts /tmp/backup.ts` then
     restore with `cp` (NOT `git checkout`, which would wipe other uncommitted story work) + `npm run clean`.
+---
+
+## 2026-06-28 - US-023 (Minimum gap between non-adjacent waypoints) — REFINEMENT 2
+- US-023 already passed (and had a prior REFINEMENT). Re-verified all 7 acceptance criteria against
+  the implementation and made ONE focused, test-only hardening:
+  - layout-rules.ts: `MIN_WAYPOINT_GAP=20` + `nonAdjacentWaypointsKeepMinGap` (70px floor, adjacent
+    pairs exempt via `j-i===1`) + checkLayout `non-adjacent-waypoints-too-close` rule — all present
+    and correct (AC1/AC2). walk-generator.ts `newWaypointConflicts` rule (1) applies the 70px floor to
+    non-adjacent priors / 50px to the adjacent predecessor (AC3). ADR-0007 documents the decision and
+    qualifies ADR-0005 (AC5). Generator + predicate + boundary tests all present (AC4).
+  - HARDENING: the Walk.create rule-7 throw test (tests/walk.test.ts) used
+    `assert.throws(fn, /non-adjacent-waypoints-too-close/)`, whose comment claimed "only the new
+    min-gap rule fires" but whose assertion only proved the rule name is a SUBSTRING of the joined
+    violation message. A future geometry/threshold drift that made the U-shape trip a 2nd rule would
+    keep the test green and rot the isolation claim. Replaced the regex with a matcher fn that parses
+    the rule list off the message and `deepEqual`s it to exactly ['non-adjacent-waypoints-too-close'],
+    mirroring the checkLayout-level isolation test (layout-rules.test.ts:384 already asserts overlap
+    is NOT also tripped) at the Walk aggregate level.
+- Files changed: tests/walk.test.ts (rule-7 test strengthened); scripts/ralph/prd.json (US-023 notes
+  REFINEMENT 2, passes stays true); scripts/ralph/progress.txt (this entry + extended the Codebase
+  Patterns substring-match note).
+- VERIFIED: npm run clean + npm test → 265 pass (unchanged count; test strengthened in place);
+  typecheck clean; verify:renderer / verify:controls (34) / verify:main (14) all green.
+- PROVEN TO BITE: perturbed the rule-7 U-shape's far end to (120,360) — still orthogonal, 44.7px from
+  WP1 — which trips FOUR rules (overlap + min-gap + segment-too-close + segment-through-circle). The
+  old regex PASSES (name present); the new deepEqual FAILS (4 rules ≠ 1). Reverted to (148,360) via
+  cp-backup + npm run clean; re-ran the full gate green.
+- **Learnings for future iterations:**
+  - A per-rule `Walk.create` (aggregate) throw test that uses `assert.throws(fn, /rule/)` has the same
+    blind spot as the predicate-level substring match: it can't tell "this fixture is rejected SOLELY
+    for rule X" from "rule X is one of several violations". When the test's PURPOSE is isolation, parse
+    the joined message (`Invalid Walk layout: <rule>, <rule>, ...`) and deepEqual the list — don't
+    regex. The companion checkLayout test should still do `v.length===1` / `!v.some(otherRule)`.
+  - A perturbation that "looks" like it should trip a single extra rule can instead cascade into
+    several (moving a waypoint near another also pulls the JOINING segment near non-adjacent waypoints
+    → overlap + min-gap + segment-too-close + segment-through-circle all fire). Keep segments
+    orthogonal when perturbing a fixture, or you trip the diagonal Segment-ctor guard FIRST (a
+    different, less informative failure than the layout cascade you intended to demonstrate).
 ---
