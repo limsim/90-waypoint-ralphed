@@ -71,7 +71,10 @@ const server = createServer(async (req, res) => {
   }
 
   const contentType = MIME_TYPES[extname(filePath).toLowerCase()] ?? "application/octet-stream";
-  res.writeHead(200, { "Content-Type": contentType });
+  // Dev server: never let the browser cache compiled output. With `tsc -b --watch`
+  // (npm run dev) rebuilding dist/ on every save, a cached dist/src/*.js module would
+  // silently serve stale code. `no-store` keeps every reload honest.
+  res.writeHead(200, { "Content-Type": contentType, "Cache-Control": "no-store" });
   const stream = createReadStream(filePath);
   stream.on("error", () => {
     if (!res.headersSent) res.writeHead(500);

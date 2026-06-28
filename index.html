@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>90 Waypoint Map</title>
+    <style>
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+        margin: 1rem;
+        color: #222;
+      }
+
+      /*
+       * Control surface (US-016). The DOM controls adapter (src/adapters/dom-controls.ts) wires
+       * these elements by id (see CONTROL_IDS) to the GenerateWalk / ClearWalk use cases. The markup
+       * and styling live here; all behaviour lives in the adapter.
+       */
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+        margin-bottom: 0.75rem;
+      }
+      .controls label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+      }
+      .controls button {
+        cursor: pointer;
+      }
+      .controls input[type="number"] {
+        width: 4rem;
+      }
+
+      /*
+       * The canvas + loading overlay share a positioned wrapper so the overlay can sit exactly over
+       * the canvas. `display: inline-block` keeps the wrapper sized to the canvas element.
+       */
+      .canvas-wrap {
+        position: relative;
+        display: inline-block;
+        max-width: 100%;
+      }
+
+      /*
+       * Viewport fit (US-015 / docs/adr/0005). The canvas backing store is capped at A4 (794×1123),
+       * but on a narrower viewport the ELEMENT is CSS-scaled down so it never overflows horizontally.
+       * `max-width: 100%` shrinks it to the available width; `height: auto` preserves the A4 aspect
+       * ratio. This is presentation only — the backing store (and the domain coordinates) are unchanged.
+       */
+      canvas {
+        display: block;
+        max-width: 100%;
+        height: auto;
+        border: 1px solid #ddd;
+      }
+
+      /*
+       * Loading overlay (US-016). Hidden by default; the DOM controls adapter sets
+       * `style.display = "flex"` during generation and back to "none" in its finally. The spinner is a
+       * pure-CSS animation, so once GenerateWalk frees the event loop between batches the browser can
+       * paint and animate it without the synchronous generation blocking it.
+       */
+      #loading-overlay {
+        position: absolute;
+        inset: 0;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        background: rgba(255, 255, 255, 0.8);
+        font: 600 1rem/1.2 Arial, Helvetica, sans-serif;
+        color: #222;
+        z-index: 2; /* above the waypoint tooltip, so generation always covers it cleanly */
+      }
+      .spinner {
+        width: 48px;
+        height: 48px;
+        border: 5px solid #d9d9d9;
+        border-top-color: #222;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /*
+       * Generation-failure error overlay (US-020). Hidden by default; the DOM controls adapter sets
+       * `style.display = "flex"` when GenerateWalk surfaces the bounded generator's exhausted-re-roll
+       * failure signal (ADR-0002 guarantees this path is reached, never an infinite hang), and hides
+       * it again at the start of the next Generate and on Clear. It sits ABOVE the loading overlay
+       * and the tooltip (z-index) so the message is never occluded.
+       */
+      #error-overlay {
+        position: absolute;
+        inset: 0;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        padding: 1.5rem;
+        background: rgba(255, 255, 255, 0.92);
+        text-align: center;
+        z-index: 3; /* above the loading overlay (2) and the tooltip (1) */
+      }
+      #error-overlay .error-message {
+        margin: 0;
+        max-width: 30rem;
+        color: #b00020;
+        font: 600 1.1rem/1.4 Arial, Helvetica, sans-serif;
+      }
+
+      /*
+       * Waypoint tooltip (US-017). A DOM overlay — NOT painted on the canvas — shown when a waypoint is
+       * clicked, with its number, turn direction and cumulative generation-space distance. Hidden by
+       * default; the DOM controls adapter fills its text, positions it at the click point within this
+       * positioned wrapper, and flips `style.display`. `pointer-events: none` keeps it from swallowing
+       * the next click/hover on the canvas underneath. `white-space: pre-line` renders the adapter's
+       * newline-separated text as separate lines.
+       */
+      #waypoint-tooltip {
+        position: absolute;
+        display: none;
+        pointer-events: none;
+        z-index: 1;
+        max-width: 12rem;
+        padding: 0.4rem 0.55rem;
+        border-radius: 4px;
+        background: rgba(34, 34, 34, 0.92);
+        color: #fff;
+        font: 12px/1.35 Arial, Helvetica, sans-serif;
+        white-space: pre-line;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+      }
+
+      /*
+       * Legend (US-018). A DOM/HTML legend below the canvas — NOT painted on the canvas — explaining
+       * the three waypoint symbols. The swatch colours MIRROR the canvas renderer
+       * (src/adapters/canvas-renderer.ts): terminals are a black filled circle (TERMINAL_FILL
+       * #000000), ordinary waypoints a white circle with a black border (WAYPOINT_FILL #ffffff /
+       * WAYPOINT_BORDER #000000), and a wildcard an orange ring (WILDCARD_RING_COLOUR #ff8c00). Keep
+       * these in sync with those constants. US-019's print stylesheet keeps this legend on the page.
+       */
+      .legend {
+        list-style: none;
+        margin: 0.75rem 0 0;
+        padding: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.25rem;
+        font-size: 0.9rem;
+      }
+      .legend li {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .legend .swatch {
+        width: 20px;
+        height: 20px;
+        flex: none;
+        border-radius: 50%;
+        box-sizing: border-box;
+      }
+      /* Start / End: a black filled circle (canvas terminal fill). */
+      .legend .swatch-terminal {
+        background: #000000;
+      }
+      /* Waypoint: a white filled circle with a black border (canvas interior style, 2px stroke). */
+      .legend .swatch-waypoint {
+        background: #ffffff;
+        border: 2px solid #000000;
+      }
+      /* Wildcard: an orange ring — transparent inside, 3px orange stroke (canvas wildcard ring). */
+      .legend .swatch-wildcard {
+        background: transparent;
+        border: 3px solid #ff8c00;
+      }
+
+      /*
+       * Print stylesheet (US-019). Print just the map + legend on a single A4 page: hide all
+       * interactive chrome (the controls, the loading overlay, the click tooltip) and the page
+       * heading, cap the sheet at A4, and shrink the canvas so the legend fits beneath it on the
+       * SAME page.
+       *
+       * The hide rules use `!important` deliberately: the DOM controls adapter
+       * (src/adapters/dom-controls.ts) sets INLINE `style.display` on the loading overlay (during
+       * generation), the error overlay (US-020, on a failed generation) and the tooltip (when a
+       * waypoint is clicked). An inline style wins over a normal stylesheet rule, so without
+       * `!important` a stuck overlay, an error message, or an open tooltip would print.
+       */
+      @media print {
+        /* Cap the sheet at A4 with a modest margin so the printout is always a single A4 page. */
+        @page {
+          size: A4 portrait;
+          margin: 12mm;
+        }
+
+        /* Hide everything that isn't the map or the legend. */
+        h1,
+        .controls,
+        #loading-overlay,
+        #error-overlay,
+        #waypoint-tooltip {
+          display: none !important;
+        }
+
+        html,
+        body {
+          margin: 0;
+          padding: 0;
+        }
+
+        /* Keep the whole map + legend together; never split them across pages. */
+        main {
+          page-break-inside: avoid;
+        }
+
+        .canvas-wrap {
+          display: block;
+          max-width: 100%;
+        }
+
+        /*
+         * The canvas backing store is A4-sized (794×1123 ≈ 210×297mm), so at natural size it would
+         * fill the entire page and push the legend onto a second sheet. Capping its height (with
+         * width/height:auto preserving the A4 aspect ratio) shrinks the map so the legend fits
+         * beneath it on the same page — this max-height is the single-A4-page mechanism.
+         */
+        canvas {
+          border: 1px solid #999;
+          max-width: 100%;
+          max-height: 245mm;
+          width: auto;
+          height: auto;
+        }
+
+        /* The legend stays — print it compactly below the map (the AC: "the map and legend"). */
+        .legend {
+          margin-top: 6mm;
+          page-break-inside: avoid;
+        }
+
+        /*
+         * Force the swatch fills to print. Browsers default to `print-color-adjust: economy`,
+         * which strips background colours to save ink — that would print the black Start/End
+         * swatch (a CSS `background`, no border) as an EMPTY white circle, making the legend
+         * meaningless in print. `exact` keeps every swatch fill/ring as drawn on screen so the
+         * printed legend still mirrors the canvas symbols. The `-webkit-` prefix covers older
+         * Blink/WebKit which only honour the prefixed property.
+         */
+        .legend .swatch {
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>90 Waypoint Map</h1>
+
+      <!-- Control surface (US-016). Wired by id in src/adapters/dom-controls.ts. -->
+      <div class="controls">
+        <button id="generate-button" type="button">Generate Walk</button>
+        <button id="clear-button" type="button">Clear</button>
+        <label>
+          Waypoints
+          <input id="waypoint-count" type="number" min="10" max="90" step="1" value="90" />
+        </label>
+        <label>
+          <input id="toggle-wildcards" type="checkbox" checked />
+          Show Wildcards
+        </label>
+        <label>
+          <input id="toggle-turns" type="checkbox" checked />
+          Show Turns
+        </label>
+        <button id="print-button" type="button">Print</button>
+      </div>
+
+      <div class="canvas-wrap">
+        <!-- A4 at 96 PPI (794x1123); the renderer adapter (US-013+) draws here. -->
+        <canvas id="walk-canvas" width="794" height="1123"></canvas>
+        <!-- Shown over the canvas during generation (US-016). -->
+        <div id="loading-overlay" role="status" aria-live="polite">
+          <div class="spinner" aria-hidden="true"></div>
+          <span>Generating...</span>
+        </div>
+        <!-- Shown over the canvas when the bounded generator exhausts its re-rolls (US-020); the
+             adapter flips its display. role=alert so it is announced; the message lives here. -->
+        <div id="error-overlay" role="alert" aria-live="assertive">
+          <p class="error-message">Couldn't generate a walk - try again or reduce the waypoint count</p>
+        </div>
+        <!-- DOM-overlay tooltip for a clicked waypoint (US-017); filled + positioned by the adapter. -->
+        <div id="waypoint-tooltip" role="status" aria-live="polite"></div>
+      </div>
+
+      <!-- Legend (US-018). DOM/HTML below the canvas (not canvas-painted); swatches mirror the canvas
+           symbol colours. Decorative swatches are aria-hidden; the text carries the meaning. -->
+      <ul id="legend" class="legend" aria-label="Map legend">
+        <li>
+          <span class="swatch swatch-terminal" aria-hidden="true"></span>
+          Start / End
+        </li>
+        <li>
+          <span class="swatch swatch-waypoint" aria-hidden="true"></span>
+          Waypoint
+        </li>
+        <li>
+          <span class="swatch swatch-wildcard" aria-hidden="true"></span>
+          Wildcard — walker goes straight
+        </li>
+      </ul>
+    </main>
+    <!-- Compiled ES module entry. `npm run build` mirrors src/ under dist/, so
+         src/main.ts is emitted to dist/src/main.js. -->
+    <script type="module" src="./dist/src/main.js"></script>
+  </body>
+</html>

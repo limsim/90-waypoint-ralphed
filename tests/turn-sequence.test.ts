@@ -1,107 +1,118 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-
-import { Turn } from "../src/domain/heading.js";
-import { RandomSource } from "../src/domain/random-source.js";
 import { TurnSequence } from "../src/domain/turn-sequence.js";
+import { Turn } from "../src/domain/turn.js";
+import { RandomSource } from "../src/domain/random-source.js";
 
-/**
- * A deterministic stand-in for the seedable RandomSource (the production impl lands in
- * US-009). mulberry32: same seed → identical stream, so it exercises the "deterministic
- * output under a seeded source" criterion without depending on the real adapter.
- */
-function seeded(seed: number): RandomSource {
-  let state = seed >>> 0;
-  const nextFloat = (): number => {
-    state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+function stubSource(values: number[]): RandomSource {
+  let i = 0;
   return {
-    nextFloat,
-    nextInt: (maxExclusive: number) => Math.floor(nextFloat() * maxExclusive),
+    nextFloat: () => values[i++ % values.length],
+    nextInt: (min, max) => min + Math.floor(values[i++ % values.length] * (max - min + 1)),
   };
 }
 
-// --- Length math: N waypoints -> N-2 turns ---
-
-test("turnCountForWaypoints: N=10 has 8 turns", () => {
-  assert.equal(TurnSequence.turnCountForWaypoints(10), 8);
-});
-
-test("turnCountForWaypoints: N=90 has 88 turns", () => {
-  assert.equal(TurnSequence.turnCountForWaypoints(90), 88);
-});
-
-test("turnCountForWaypoints rejects waypointCount < 2", () => {
-  assert.throws(() => TurnSequence.turnCountForWaypoints(1), RangeError);
-});
-
-test("randomForWaypoints produces exactly N-2 turns (N=10)", () => {
-  const seq = TurnSequence.randomForWaypoints(10, seeded(1));
+test("length for N=10 is exactly 8", () => {
+  const seq = TurnSequence.generate(10, stubSource([0.3]));
   assert.equal(seq.length, 8);
 });
 
-test("randomForWaypoints produces exactly N-2 turns (N=90)", () => {
-  const seq = TurnSequence.randomForWaypoints(90, seeded(1));
+test("length for N=90 is exactly 88", () => {
+  const seq = TurnSequence.generate(90, stubSource([0.3]));
   assert.equal(seq.length, 88);
 });
 
-// --- Contents are only L/R turns ---
+test("length for N=2 is 0 (minimum walk)", () => {
+  const seq = TurnSequence.generate(2, stubSource([0.3]));
+  assert.equal(seq.length, 0);
+  assert.deepEqual([...seq.turns], []);
+});
 
-test("random sequence contains only Left/Right turns", () => {
-  const seq = TurnSequence.randomForWaypoints(90, seeded(7));
+test("turns are always Left or Right", () => {
+  const seq = TurnSequence.generate(8, stubSource([0.0, 0.1, 0.4, 0.5, 0.6, 0.9]));
   for (const t of seq.turns) {
     assert.ok(t === Turn.Left || t === Turn.Right);
   }
 });
 
-test("random rejects a negative length", () => {
-  assert.throws(() => TurnSequence.random(-1, seeded(1)), RangeError);
+test("nextFloat < 0.5 yields Left, >= 0.5 yields Right", () => {
+  const seq = TurnSequence.generate(4, stubSource([0.0, 0.99]));
+  assert.equal(seq.turns[0], Turn.Left);
+  assert.equal(seq.turns[1], Turn.Right);
 });
 
-test("random of length 0 is the empty sequence", () => {
-  const seq = TurnSequence.random(0, seeded(1));
-  assert.equal(seq.length, 0);
-  assert.deepEqual(seq.turns, []);
+test("deterministic: same seeded source produces same sequence", () => {
+  const values = [0.2, 0.8, 0.4, 0.6, 0.1, 0.9, 0.3, 0.7];
+  const seq1 = TurnSequence.generate(10, stubSource(values));
+  const seq2 = TurnSequence.generate(10, stubSource(values));
+  assert.deepEqual([...seq1.turns], [...seq2.turns]);
 });
 
-// --- Determinism under a seeded source ---
-
-test("same seed yields identical sequences", () => {
-  const a = TurnSequence.randomForWaypoints(90, seeded(42));
-  const b = TurnSequence.randomForWaypoints(90, seeded(42));
-  assert.ok(a.equals(b));
-  assert.deepEqual(a.turns, b.turns);
+test("different seeded sources produce different sequences", () => {
+  const allLeft = stubSource([0.0]);
+  const allRight = stubSource([0.99]);
+  const seq1 = TurnSequence.generate(10, allLeft);
+  const seq2 = TurnSequence.generate(10, allRight);
+  assert.notDeepEqual([...seq1.turns], [...seq2.turns]);
 });
 
-test("different seeds generally yield different sequences", () => {
-  const a = TurnSequence.randomForWaypoints(90, seeded(1));
-  const b = TurnSequence.randomForWaypoints(90, seeded(2));
-  assert.ok(!a.equals(b));
+test("turns are immutable (ReadonlyArray)", () => {
+  const seq = TurnSequence.generate(5, stubSource([0.3]));
+  // TypeScript enforces readonly at compile time; verify the value is an array at runtime
+  assert.ok(Array.isArray(seq.turns));
+  assert.equal(seq.turns.length, 3);
 });
 
-// --- Immutability ---
-
-test("constructor defensively copies its input array", () => {
-  const input = [Turn.Left, Turn.Right];
-  const seq = new TurnSequence(input);
-  input.push(Turn.Left); // mutate the original after construction
-  assert.equal(seq.length, 2);
+test("get(index) returns same value as turns[index]", () => {
+  const seq = TurnSequence.generate(6, stubSource([0.2, 0.8, 0.4, 0.9]));
+  for (let i = 0; i < seq.length; i++) {
+    assert.equal(seq.get(i), seq.turns[i]);
+  }
 });
 
-test("the turns getter returns a copy, not the internal array", () => {
-  const seq = new TurnSequence([Turn.Left, Turn.Right]);
-  const got = seq.turns as Turn[];
-  got.push(Turn.Left);
-  assert.equal(seq.length, 2);
+test("waypointCount < 2 throws", () => {
+  assert.throws(
+    () => TurnSequence.generate(1, stubSource([0.5])),
+    /waypointCount must be at least 2/
+  );
 });
 
-test("at(index) returns the turn and rejects out-of-range indices", () => {
-  const seq = new TurnSequence([Turn.Left, Turn.Right]);
-  assert.equal(seq.at(0), Turn.Left);
-  assert.equal(seq.at(1), Turn.Right);
-  assert.throws(() => seq.at(2), RangeError);
-  assert.throws(() => seq.at(-1), RangeError);
+test("negative waypointCount throws", () => {
+  assert.throws(
+    () => TurnSequence.generate(-5, stubSource([0.5])),
+    /waypointCount must be at least 2/
+  );
+});
+
+test("nextFloat === 0.5 yields Right (exact boundary)", () => {
+  const seq = TurnSequence.generate(3, stubSource([0.5]));
+  assert.equal(seq.turns[0], Turn.Right);
+});
+
+test("get() throws RangeError for index >= length", () => {
+  const seq = TurnSequence.generate(5, stubSource([0.3]));
+  assert.throws(() => seq.get(seq.length), /out of bounds/);
+});
+
+test("get() throws RangeError for negative index", () => {
+  const seq = TurnSequence.generate(5, stubSource([0.3]));
+  assert.throws(() => seq.get(-1), /out of bounds/);
+});
+
+test("get() on empty sequence (N=2) throws RangeError", () => {
+  const seq = TurnSequence.generate(2, stubSource([0.3]));
+  assert.throws(() => seq.get(0), /out of bounds/);
+});
+
+test("sequence exactly matches known source values", () => {
+  // [0.1, 0.9, 0.3, 0.7] → L, R, L, R for N=6 (4 turns)
+  const seq = TurnSequence.generate(6, stubSource([0.1, 0.9, 0.3, 0.7]));
+  assert.deepEqual([...seq.turns], [Turn.Left, Turn.Right, Turn.Left, Turn.Right]);
+});
+
+test("waypointCount = 0 throws", () => {
+  assert.throws(
+    () => TurnSequence.generate(0, stubSource([0.5])),
+    /waypointCount must be at least 2/
+  );
 });

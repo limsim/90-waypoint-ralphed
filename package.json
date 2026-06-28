@@ -8,7 +8,11 @@
     "build": "tsc -b",
     "typecheck": "tsc -b",
     "dev": "tsc -b --watch",
+    "clean": "rm -rf dist",
     "test": "tsc -b && node --test \"dist/tests/**/*.test.js\"",
+    "verify:renderer": "tsc -b && node scripts/verify-renderer.mjs",
+    "verify:controls": "tsc -b && node scripts/verify-controls.mjs",
+    "verify:main": "tsc -b && node scripts/verify-main.mjs",
     "serve": "node scripts/serve.mjs"
   },
   "devDependencies": {

@@ -1,77 +1,90 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { Heading } from "../src/domain/heading.js";
+import { Turn } from "../src/domain/turn.js";
 
-import { Heading, Turn } from "../src/domain/heading.js";
-import { Point } from "../src/domain/point.js";
-
-// --- Unit step vectors (screen-style axes: y increases downward) ---
-
-test("Heading unit step vectors: North is up (0,-1)", () => {
-  assert.ok(Heading.North.unitStep.equals(new Point(0, -1)));
+// Unit step vectors
+test("Heading: North step is (0, -1) - up means decreasing y", () => {
+  assert.deepEqual({ dx: Heading.North.dx, dy: Heading.North.dy }, { dx: 0, dy: -1 });
 });
 
-test("Heading unit step vectors: East is right (1,0)", () => {
-  assert.ok(Heading.East.unitStep.equals(new Point(1, 0)));
+test("Heading: East step is (1, 0)", () => {
+  assert.deepEqual({ dx: Heading.East.dx, dy: Heading.East.dy }, { dx: 1, dy: 0 });
 });
 
-test("Heading unit step vectors: South is down (0,1)", () => {
-  assert.ok(Heading.South.unitStep.equals(new Point(0, 1)));
+test("Heading: South step is (0, 1)", () => {
+  assert.deepEqual({ dx: Heading.South.dx, dy: Heading.South.dy }, { dx: 0, dy: 1 });
 });
 
-test("Heading unit step vectors: West is left (-1,0)", () => {
-  assert.ok(Heading.West.unitStep.equals(new Point(-1, 0)));
+test("Heading: West step is (-1, 0)", () => {
+  assert.deepEqual({ dx: Heading.West.dx, dy: Heading.West.dy }, { dx: -1, dy: 0 });
 });
 
-// --- Left turn: 90° counter-clockwise (N→W→S→E→N) ---
-
-test("Turn Left from North faces West", () => {
-  assert.equal(Heading.North.turn(Turn.Left), Heading.West);
+// Turn.Left (CCW)
+test("Heading: North + Left = West", () => {
+  assert.strictEqual(Heading.North.apply(Turn.Left), Heading.West);
 });
 
-test("Turn Left from West faces South", () => {
-  assert.equal(Heading.West.turn(Turn.Left), Heading.South);
+test("Heading: East + Left = North", () => {
+  assert.strictEqual(Heading.East.apply(Turn.Left), Heading.North);
 });
 
-test("Turn Left from South faces East", () => {
-  assert.equal(Heading.South.turn(Turn.Left), Heading.East);
+test("Heading: South + Left = East", () => {
+  assert.strictEqual(Heading.South.apply(Turn.Left), Heading.East);
 });
 
-test("Turn Left from East faces North", () => {
-  assert.equal(Heading.East.turn(Turn.Left), Heading.North);
+test("Heading: West + Left = South", () => {
+  assert.strictEqual(Heading.West.apply(Turn.Left), Heading.South);
 });
 
-// --- Right turn: 90° clockwise (N→E→S→W→N) ---
-
-test("Turn Right from North faces East", () => {
-  assert.equal(Heading.North.turn(Turn.Right), Heading.East);
+// Turn.Right (CW)
+test("Heading: North + Right = East", () => {
+  assert.strictEqual(Heading.North.apply(Turn.Right), Heading.East);
 });
 
-test("Turn Right from East faces South", () => {
-  assert.equal(Heading.East.turn(Turn.Right), Heading.South);
+test("Heading: East + Right = South", () => {
+  assert.strictEqual(Heading.East.apply(Turn.Right), Heading.South);
 });
 
-test("Turn Right from South faces West", () => {
-  assert.equal(Heading.South.turn(Turn.Right), Heading.West);
+test("Heading: South + Right = West", () => {
+  assert.strictEqual(Heading.South.apply(Turn.Right), Heading.West);
 });
 
-test("Turn Right from West faces North", () => {
-  assert.equal(Heading.West.turn(Turn.Right), Heading.North);
+test("Heading: West + Right = North", () => {
+  assert.strictEqual(Heading.West.apply(Turn.Right), Heading.North);
 });
 
-// --- Composition sanity: four identical turns return to the start ---
+// Turn enum values
+test("Turn.Left has value 'L'", () => {
+  assert.strictEqual(Turn.Left, "L");
+});
 
-test("Four Left turns return to the original heading", () => {
+test("Turn.Right has value 'R'", () => {
+  assert.strictEqual(Turn.Right, "R");
+});
+
+// 4-turn cycle invariant: applying the same turn 4 times must return to the original heading
+test("Heading: 4 Right turns from North returns to North", () => {
   let h = Heading.North;
-  for (let i = 0; i < 4; i++) h = h.turn(Turn.Left);
-  assert.equal(h, Heading.North);
+  for (let i = 0; i < 4; i++) h = h.apply(Turn.Right);
+  assert.strictEqual(h, Heading.North);
 });
 
-test("Four Right turns return to the original heading", () => {
-  let h = Heading.North;
-  for (let i = 0; i < 4; i++) h = h.turn(Turn.Right);
-  assert.equal(h, Heading.North);
+test("Heading: 4 Left turns from East returns to East", () => {
+  let h = Heading.East;
+  for (let i = 0; i < 4; i++) h = h.apply(Turn.Left);
+  assert.strictEqual(h, Heading.East);
 });
 
-test("Left then Right is the identity", () => {
-  assert.equal(Heading.East.turn(Turn.Left).turn(Turn.Right), Heading.East);
+// Left and Right are inverses: applying both in either order returns to origin
+test("Heading: Right then Left is identity for all headings", () => {
+  for (const h of [Heading.North, Heading.East, Heading.South, Heading.West]) {
+    assert.strictEqual(h.apply(Turn.Right).apply(Turn.Left), h);
+  }
+});
+
+test("Heading: Left then Right is identity for all headings", () => {
+  for (const h of [Heading.North, Heading.East, Heading.South, Heading.West]) {
+    assert.strictEqual(h.apply(Turn.Left).apply(Turn.Right), h);
+  }
 });

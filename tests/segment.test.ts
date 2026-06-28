@@ -1,125 +1,231 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-
+import { Segment } from "../src/domain/segment.js";
 import { Point } from "../src/domain/point.js";
-import { Segment, Orientation } from "../src/domain/segment.js";
 
-// --- Construction ---
+// Construction
 
-test("Segment: horizontal endpoints are accepted", () => {
-  const s = new Segment(new Point(0, 5), new Point(100, 5));
-  assert.equal(s.orientation, Orientation.Horizontal);
+test("Segment: horizontal construction succeeds", () => {
+  const s = new Segment(new Point(0, 5), new Point(10, 5));
+  assert.strictEqual(s.orientation, "horizontal");
+  assert.strictEqual(s.length, 10);
 });
 
-test("Segment: vertical endpoints are accepted", () => {
-  const s = new Segment(new Point(5, 0), new Point(5, 100));
-  assert.equal(s.orientation, Orientation.Vertical);
+test("Segment: vertical construction succeeds", () => {
+  const s = new Segment(new Point(5, 0), new Point(5, 20));
+  assert.strictEqual(s.orientation, "vertical");
+  assert.strictEqual(s.length, 20);
 });
 
-test("Segment: diagonal endpoints are rejected", () => {
-  assert.throws(() => new Segment(new Point(0, 0), new Point(100, 100)));
+test("Segment: diagonal construction throws", () => {
+  assert.throws(() => new Segment(new Point(0, 0), new Point(3, 4)));
 });
 
-test("Segment: degenerate (zero-length) endpoints are rejected", () => {
-  assert.throws(() => new Segment(new Point(7, 7), new Point(7, 7)));
+test("Segment: zero-length construction throws", () => {
+  assert.throws(() => new Segment(new Point(5, 5), new Point(5, 5)));
 });
 
-// --- length ---
+// Length
 
-test("Segment length: horizontal", () => {
-  assert.equal(new Segment(new Point(10, 5), new Point(130, 5)).length, 120);
+test("Segment: length is absolute for horizontal (end before start)", () => {
+  const s = new Segment(new Point(10, 5), new Point(0, 5));
+  assert.strictEqual(s.length, 10);
 });
 
-test("Segment length: vertical, regardless of endpoint order/direction", () => {
-  // North-going segment (decreasing y) — length is still positive.
-  assert.equal(new Segment(new Point(5, 100), new Point(5, 40)).length, 60);
-  assert.equal(new Segment(new Point(5, 40), new Point(5, 100)).length, 60);
+test("Segment: length is absolute for vertical (end before start)", () => {
+  const s = new Segment(new Point(5, 20), new Point(5, 0));
+  assert.strictEqual(s.length, 20);
 });
 
-// --- distanceToPoint ---
+// Orientation
 
-test("Segment distanceToPoint: point on the segment is zero", () => {
+test("Segment: horizontal orientation when y values are equal", () => {
+  assert.strictEqual(
+    new Segment(new Point(0, 10), new Point(100, 10)).orientation,
+    "horizontal"
+  );
+});
+
+test("Segment: vertical orientation when x values are equal", () => {
+  assert.strictEqual(
+    new Segment(new Point(10, 0), new Point(10, 100)).orientation,
+    "vertical"
+  );
+});
+
+// distanceFrom — perpendicular (within range)
+
+test("Segment: distance from point directly above horizontal segment is perpendicular", () => {
   const s = new Segment(new Point(0, 0), new Point(100, 0));
-  assert.equal(s.distanceToPoint(new Point(50, 0)), 0);
+  assert.strictEqual(s.distanceFrom(new Point(50, 30)), 30);
 });
 
-test("Segment distanceToPoint: perpendicular projection inside the segment", () => {
+test("Segment: distance from point lying on horizontal segment is zero", () => {
   const s = new Segment(new Point(0, 0), new Point(100, 0));
-  // (50, 35) projects to (50, 0) -> distance 35
-  assert.equal(s.distanceToPoint(new Point(50, 35)), 35);
+  assert.strictEqual(s.distanceFrom(new Point(50, 0)), 0);
 });
 
-test("Segment distanceToPoint: point beyond an endpoint uses the endpoint", () => {
+test("Segment: distance from point beside vertical segment is perpendicular", () => {
+  const s = new Segment(new Point(0, 0), new Point(0, 100));
+  assert.strictEqual(s.distanceFrom(new Point(20, 50)), 20);
+});
+
+test("Segment: distance from point lying on vertical segment is zero", () => {
+  const s = new Segment(new Point(0, 0), new Point(0, 100));
+  assert.strictEqual(s.distanceFrom(new Point(0, 50)), 0);
+});
+
+// distanceFrom — outside segment range (endpoint distance)
+
+test("Segment: distance from point left of horizontal segment uses left endpoint", () => {
+  const s = new Segment(new Point(10, 0), new Point(90, 0));
+  assert.strictEqual(s.distanceFrom(new Point(0, 0)), 10);
+});
+
+test("Segment: distance from point right of horizontal segment uses right endpoint", () => {
+  const s = new Segment(new Point(10, 0), new Point(90, 0));
+  assert.strictEqual(s.distanceFrom(new Point(100, 0)), 10);
+});
+
+test("Segment: distance from point above vertical segment uses top endpoint", () => {
+  const s = new Segment(new Point(0, 10), new Point(0, 90));
+  assert.strictEqual(s.distanceFrom(new Point(0, 0)), 10);
+});
+
+test("Segment: distance from point below vertical segment uses bottom endpoint", () => {
+  const s = new Segment(new Point(0, 10), new Point(0, 90));
+  assert.strictEqual(s.distanceFrom(new Point(0, 100)), 10);
+});
+
+test("Segment: distance from point off-corner uses hypotenuse (3-4-5 triangle)", () => {
   const s = new Segment(new Point(0, 0), new Point(100, 0));
-  // (130, 0) is 30 past the (100,0) end along the same line
-  assert.equal(s.distanceToPoint(new Point(130, 0)), 30);
-  // (103, 4) -> nearest endpoint (100,0) -> hypot(3,4) = 5
-  assert.equal(s.distanceToPoint(new Point(103, 4)), 5);
+  assert.strictEqual(s.distanceFrom(new Point(-3, 4)), 5);
 });
 
-test("Segment distanceToPoint: vertical segment", () => {
-  const s = new Segment(new Point(20, 0), new Point(20, 100));
-  assert.equal(s.distanceToPoint(new Point(55, 50)), 35);
+// parallelOverlap
+
+test("Segment: parallel horizontal segments with overlap return correct values", () => {
+  const s1 = new Segment(new Point(0, 0), new Point(100, 0));
+  const s2 = new Segment(new Point(50, 55), new Point(150, 55));
+  const r = s1.parallelOverlap(s2);
+  assert.ok(r !== null);
+  assert.strictEqual(r.separation, 55);
+  assert.strictEqual(r.overlapLength, 50);
 });
 
-// --- parallelOverlap ---
-
-test("Segment parallelOverlap: perpendicular segments do not overlap", () => {
-  const h = new Segment(new Point(0, 0), new Point(100, 0));
-  const v = new Segment(new Point(50, -50), new Point(50, 50));
-  assert.equal(h.parallelOverlap(v), null);
+test("Segment: parallel vertical segments with overlap return correct values", () => {
+  const s1 = new Segment(new Point(0, 0), new Point(0, 100));
+  const s2 = new Segment(new Point(55, 50), new Point(55, 150));
+  const r = s1.parallelOverlap(s2);
+  assert.ok(r !== null);
+  assert.strictEqual(r.separation, 55);
+  assert.strictEqual(r.overlapLength, 50);
 });
 
-test("Segment parallelOverlap: two horizontals sharing an x-range", () => {
-  const a = new Segment(new Point(0, 0), new Point(100, 0));
-  const b = new Segment(new Point(40, 60), new Point(140, 60));
-  const r = a.parallelOverlap(b);
-  assert.ok(r);
-  assert.equal(r.overlapStart, 40);
-  assert.equal(r.overlapEnd, 100);
-  assert.equal(r.separation, 60);
+test("Segment: parallel horizontal segments with no overlap return overlapLength 0", () => {
+  const s1 = new Segment(new Point(0, 0), new Point(50, 0));
+  const s2 = new Segment(new Point(60, 30), new Point(110, 30));
+  const r = s1.parallelOverlap(s2);
+  assert.ok(r !== null);
+  assert.strictEqual(r.separation, 30);
+  assert.strictEqual(r.overlapLength, 0);
 });
 
-test("Segment parallelOverlap: two horizontals with disjoint x-ranges return null", () => {
-  const a = new Segment(new Point(0, 0), new Point(100, 0));
-  const b = new Segment(new Point(150, 10), new Point(250, 10));
-  assert.equal(a.parallelOverlap(b), null);
+test("Segment: parallel segments just touching (endpoint-to-endpoint) return overlapLength 0", () => {
+  const s1 = new Segment(new Point(0, 0), new Point(50, 0));
+  const s2 = new Segment(new Point(50, 20), new Point(100, 20));
+  const r = s1.parallelOverlap(s2);
+  assert.ok(r !== null);
+  assert.strictEqual(r.overlapLength, 0);
 });
 
-test("Segment parallelOverlap: a shared endpoint counts as a zero-length overlap", () => {
-  const a = new Segment(new Point(0, 0), new Point(100, 0));
-  const b = new Segment(new Point(100, 10), new Point(200, 10));
-  const r = a.parallelOverlap(b);
-  assert.ok(r);
-  assert.equal(r.overlapStart, 100);
-  assert.equal(r.overlapEnd, 100);
-  assert.equal(r.separation, 10);
+test("Segment: non-parallel segments return null for parallelOverlap", () => {
+  const s1 = new Segment(new Point(0, 0), new Point(100, 0));
+  const s2 = new Segment(new Point(0, 0), new Point(0, 100));
+  assert.strictEqual(s1.parallelOverlap(s2), null);
 });
 
-test("Segment parallelOverlap: two verticals sharing a y-range", () => {
-  const a = new Segment(new Point(0, 0), new Point(0, 100));
-  const b = new Segment(new Point(55, 30), new Point(55, 200));
-  const r = a.parallelOverlap(b);
-  assert.ok(r);
-  assert.equal(r.overlapStart, 30);
-  assert.equal(r.overlapEnd, 100);
-  assert.equal(r.separation, 55);
+test("Segment: parallelOverlap is symmetric", () => {
+  const s1 = new Segment(new Point(0, 0), new Point(100, 0));
+  const s2 = new Segment(new Point(30, 40), new Point(130, 40));
+  const r1 = s1.parallelOverlap(s2);
+  const r2 = s2.parallelOverlap(s1);
+  assert.ok(r1 !== null && r2 !== null);
+  assert.strictEqual(r1.separation, r2.separation);
+  assert.strictEqual(r1.overlapLength, r2.overlapLength);
 });
 
-test("Segment parallelOverlap: separation reports exact spacing (54 vs 55 boundary)", () => {
-  const base = new Segment(new Point(0, 0), new Point(100, 0));
-  const at54 = new Segment(new Point(0, 54), new Point(100, 54));
-  const at55 = new Segment(new Point(0, 55), new Point(100, 55));
-  assert.equal(base.parallelOverlap(at54)?.separation, 54);
-  assert.equal(base.parallelOverlap(at55)?.separation, 55);
+// Co-linear segments (separation = 0) — critical edge case for layout spacing rules
+
+test("Segment: co-linear horizontal segments with overlap return separation 0", () => {
+  const s1 = new Segment(new Point(0, 0), new Point(100, 0));
+  const s2 = new Segment(new Point(50, 0), new Point(150, 0));
+  const r = s1.parallelOverlap(s2);
+  assert.ok(r !== null);
+  assert.strictEqual(r.separation, 0);
+  assert.strictEqual(r.overlapLength, 50);
 });
 
-test("Segment parallelOverlap: collinear overlapping segments have zero separation", () => {
-  const a = new Segment(new Point(0, 0), new Point(100, 0));
-  const b = new Segment(new Point(50, 0), new Point(150, 0));
-  const r = a.parallelOverlap(b);
-  assert.ok(r);
-  assert.equal(r.separation, 0);
-  assert.equal(r.overlapStart, 50);
-  assert.equal(r.overlapEnd, 100);
+test("Segment: co-linear vertical segments with no range overlap return separation 0 and overlapLength 0", () => {
+  const s1 = new Segment(new Point(0, 0), new Point(0, 50));
+  const s2 = new Segment(new Point(0, 60), new Point(0, 110));
+  const r = s1.parallelOverlap(s2);
+  assert.ok(r !== null);
+  assert.strictEqual(r.separation, 0);
+  assert.strictEqual(r.overlapLength, 0);
+});
+
+// start/end accessibility — used by layout-rules and renderer
+
+test("Segment: start and end points are accessible", () => {
+  const a = new Point(10, 20);
+  const b = new Point(10, 80);
+  const s = new Segment(a, b);
+  assert.ok(s.start.equals(a));
+  assert.ok(s.end.equals(b));
+});
+
+// distanceFrom — at endpoints
+
+test("Segment: distanceFrom returns 0 at start endpoint", () => {
+  const s = new Segment(new Point(10, 20), new Point(10, 80));
+  assert.strictEqual(s.distanceFrom(new Point(10, 20)), 0);
+});
+
+test("Segment: distanceFrom returns 0 at end endpoint", () => {
+  const s = new Segment(new Point(10, 20), new Point(10, 80));
+  assert.strictEqual(s.distanceFrom(new Point(10, 80)), 0);
+});
+
+// distanceFrom — symmetric about the segment axis
+
+test("Segment: distanceFrom is identical on both sides of a horizontal segment", () => {
+  const s = new Segment(new Point(0, 0), new Point(100, 0));
+  assert.strictEqual(s.distanceFrom(new Point(50, 25)), s.distanceFrom(new Point(50, -25)));
+});
+
+test("Segment: distanceFrom is identical on both sides of a vertical segment", () => {
+  const s = new Segment(new Point(0, 0), new Point(0, 100));
+  assert.strictEqual(s.distanceFrom(new Point(25, 50)), s.distanceFrom(new Point(-25, 50)));
+});
+
+// parallelOverlap — direction-independence (start > end)
+
+test("Segment: parallelOverlap handles reversed-direction horizontal segments", () => {
+  const s1 = new Segment(new Point(100, 0), new Point(0, 0));
+  const s2 = new Segment(new Point(150, 40), new Point(50, 40));
+  const r = s1.parallelOverlap(s2);
+  assert.ok(r !== null);
+  assert.strictEqual(r.separation, 40);
+  assert.strictEqual(r.overlapLength, 50);
+});
+
+// Construction error messages
+
+test("Segment: diagonal construction error mentions 'diagonal'", () => {
+  assert.throws(() => new Segment(new Point(0, 0), new Point(3, 4)), /diagonal/i);
+});
+
+test("Segment: zero-length construction error mentions 'non-zero'", () => {
+  assert.throws(() => new Segment(new Point(5, 5), new Point(5, 5)), /non-zero/i);
 });

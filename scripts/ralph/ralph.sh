@@ -1,8 +1,9 @@
 #!/bin/bash
 # Ralph Wiggum - Long-running AI agent loop
 # Loops a SINGLE user story for the specified number of iterations.
-# Usage: ./ralph.sh [--tool amp|claude] [--story US-XXX] [max_iterations]
+# Usage: ./ralph.sh [--tool amp|claude] [--model NAME] [--story US-XXX] [max_iterations]
 #   --story  Story ID to loop on. Default: highest-priority story with passes:false.
+#   --model  Model to pass to the tool (e.g. opus, sonnet, claude-opus-4-8). Default: tool's own default.
 # The loop always runs the full iteration count (no early exit) - once the story
 # passes, later iterations act as refinement passes on the same story.
 
@@ -10,7 +11,8 @@ set -e
 
 # Parse arguments
 TOOL="amp"  # Default to amp for backwards compatibility
-MAX_ITERATIONS=10
+MODEL=""    # Empty = use the tool's own default model
+MAX_ITERATIONS=3
 STORY_ID=""
 
 while [[ $# -gt 0 ]]; do
@@ -21,6 +23,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --tool=*)
       TOOL="${1#*=}"
+      shift
+      ;;
+    --model)
+      MODEL="$2"
+      shift 2
+      ;;
+    --model=*)
+      MODEL="${1#*=}"
       shift
       ;;
     --story)
@@ -45,6 +55,12 @@ done
 if [[ "$TOOL" != "amp" && "$TOOL" != "claude" ]]; then
   echo "Error: Invalid tool '$TOOL'. Must be 'amp' or 'claude'."
   exit 1
+fi
+
+# Optional model flag, passed through to the selected tool only when set.
+MODEL_ARGS=()
+if [[ -n "$MODEL" ]]; then
+  MODEL_ARGS=(--model "$MODEL")
 fi
 SCRIPT_DIR="./scripts/ralph"
 echo $SCRIPT_DIR
@@ -123,9 +139,13 @@ story' guidance above; the story is fixed for this run.
 
 If $STORY_ID already has passes:true, treat this as a REFINEMENT pass: re-check the
 implementation against the story's acceptance criteria, improve quality/robustness/tests,
-re-run the quality gate, and commit any changes. Always leave the build green."
+re-run the quality gate, and commit any changes. Always leave the build green.
 
-echo "Starting Ralph - Tool: $TOOL - Story: $STORY_ID ($STORY_TITLE) - Iterations: $MAX_ITERATIONS"
+Read the PRD from scripts/ralph/prd.json and APPEND your progress to scripts/ralph/progress.txt
+(both relative to the repo-root working directory). Do NOT create or write a prd.json or
+progress.txt at the repo root - those copies are invisible to this runner."
+
+echo "Starting Ralph - Tool: $TOOL - Model: ${MODEL:-default} - Story: $STORY_ID ($STORY_TITLE) - Iterations: $MAX_ITERATIONS"
 
 for i in $(seq 1 $MAX_ITERATIONS); do
   echo ""
@@ -139,10 +159,18 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   # Run the selected tool. We always continue to the next iteration regardless of
   # the story's pass state - the full iteration count is the only stop condition.
   if [[ "$TOOL" == "amp" ]]; then
-    printf '%s' "$PROMPT" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr || true
+    printf '%s' "$PROMPT" | amp --dangerously-allow-all "${MODEL_ARGS[@]}" 2>&1 | tee /dev/stderr || true
   else
     # Claude Code: --dangerously-skip-permissions for autonomous operation, --print for output
-    printf '%s' "$PROMPT" | claude --dangerously-skip-permissions --print --output-format stream-json --verbose 2>&1 | tee /dev/stderr || true
+    printf '%s' "$PROMPT" | claude --dangerously-skip-permissions --print --output-format stream-json --verbose "${MODEL_ARGS[@]}" 2>&1 | tee /dev/stderr || true
+  fi
+
+  # Safety net: capture anything the agent left uncommitted this iteration so each
+  # iteration is a discrete commit. No-op when the working tree is already clean.
+  if [[ -n "$(git status --porcelain)" ]]; then
+    git add -A
+    git commit -m "chore: $STORY_ID iteration $i of $MAX_ITERATIONS (ralph auto-commit)" || true
+    echo "Auto-committed leftover changes for iteration $i."
   fi
 
   echo "Iteration $i complete. Continuing..."
