@@ -27,10 +27,22 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
 - Imports `WAYPOINT_RADIUS` from `domain/layout-rules.js` so the DRAWN circle radius is the SAME
   single source of truth as the layout invariant — never hard-code 25 here.
 - Coordinate transform: content box = `walk.boundingBox` grown by `GRID_PADDING` (100px) each side.
-  `draw` fills the background white in SCREEN space (identity transform) THEN
-  `ctx.translate(-contentMinX, -contentMinY)` inside a `save`/`restore` so the walk is visible
-  wherever it sits in generation space. **US-015** layers the A4 cap / uniform downscale / auto-centre
-  / viewport-fit transform on top of this translate — don't add scaling in US-013.
+  `draw` fills the background white in SCREEN space (identity transform) THEN applies the **US-015**
+  A4-fit transform inside a `save`/`restore`: `translate(offsetX, offsetY)` → `scale(s, s)` →
+  `translate(-contentMinX, -contentMinY)`. All drawing stays in generation-space px; the transform
+  maps it to the A4 page. **Don't add a competing scale/translate inside the draw passes** — they
+  draw in generation space and inherit this transform.
+- **US-015 A4 cap / uniform downscale / auto-centre** (docs/adr/0005): `A4_WIDTH=794`, `A4_HEIGHT=1123`
+  (@ 96 PPI). `s = Math.min(1, capW/contentW, capH/contentH)` where `cap = min(A4, canvas dim)`. The
+  `min(1, …)` CLAMP is load-bearing: a walk already within A4 keeps its natural size (never enlarged);
+  only walks larger than A4 are shrunk. `offset = (canvasDim - contentDim*s) / 2` centres the scaled
+  padded content box, so the box's screen centre is always the canvas centre (equal margins). Stroke
+  widths / ring radius / label offset are generation-space px and scale ALONG with everything (no
+  special-casing) — dense sub-nominal spacing for big walks is intended (ADR-0005), not a bug.
+- **Viewport fit (AC4) is CSS, not a Canvas transform** — it lives in `index.html`
+  (`canvas { max-width: 100%; height: auto }`). The backing store stays A4 (794×1123); only the
+  displayed element shrinks on a narrow viewport, preserving aspect ratio (no horizontal scroll).
+  US-017 hit-testing must invert BOTH the CSS scale (element vs backing store) AND this A4 transform.
 - Grid lines are lattice-aligned (`Math.ceil(min/60)*60`) and clipped to the content box.
 - Path is one connected polyline through the waypoint centres — orthogonality is guaranteed by the
   `Segment` constructor (corners only at waypoints, no diagonals, no mid-segment bends).

@@ -153,6 +153,30 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   transform + a current-path of poly/arc subpaths; emit <circle>/<polyline>/<text>/<rect> on
   fill/stroke/fillText/fillRect with the live style snapshot). Because the renderer drives it, the SVG
   IS the output (not a parallel reimpl). Rasterize with `qlmanage -t -s <px> -o <dir> file.svg`.
+  GOTCHA: CanvasRenderer's ctor takes the CANVAS element and calls `canvas.getContext("2d")` — pass
+  `{ width, height, getContext: () => fakeCtx }`, NOT the context directly. qlmanage anti-aliases thin
+  near-axis grid lines into a faint SKEW at 1:1 — a rasterization artifact, not a renderer bug (the
+  verify-renderer harness proves the grid is axis-aligned 60px cells from the recorded ops).
+- US-015 canvas-renderer A4 fit: after the white background (screen space), `draw` applies a pure
+  canvas transform `translate(offsetX,offsetY) -> scale(s,s) -> translate(-minX,-minY)` (save/restore),
+  so every draw pass stays in generation-space px and inherits the fit. `s = min(1, capW/contentW,
+  capH/contentH)`, `cap = min(A4{794,1123}, canvas dim)`; the `min(1,..)` CLAMP keeps small walks at
+  natural size (never enlarged) — only walks larger than A4 downscale. `offset = (canvasDim -
+  contentDim*s)/2` centres the padded content box (box centre == canvas centre, equal margins).
+  contentW/H ≥ 2*GRID_PADDING so never zero. Do NOT add a competing scale inside the draw passes.
+- US-015 AC4 viewport fit is CSS in index.html (`canvas { max-width:100%; height:auto }`), NOT a
+  Canvas-2D transform: the backing store stays A4, only the displayed element shrinks on a narrow
+  viewport (preserving aspect ratio, no horizontal scroll). US-017 hit-testing must invert BOTH the
+  CSS element scale AND this A4 transform (viewport -> A4 -> generation), per ADR-0005.
+- When a transform-tracking fake ctx gains a real SCALE (US-015), upgrade it from a translate-only
+  (tx,ty) model to the full affine `{a,d,e,f}` (uniform scale + translate, no rotation/skew): screen
+  `x = a*lx + e`, `y = d*ly + f`; `save/restore` push/pop the matrix, `scale(x,y)` multiplies a/d,
+  `translate(x,y)` does `e += a*x; f += d*y`. KEEP recording the untransformed local `lx/ly` alongside
+  the screen `x/y` — prior stories' assertions read lx/ly (generation space, transform-invariant) so
+  they keep passing; new fit assertions read the screen x/y. Verify the fit from FIRST PRINCIPLES:
+  derive the applied scale from the OUTPUT (screen spread / gen spread of two circles), match it to
+  `min(1,A4/content)` computed with A4 GOLDEN literals hard-coded in the harness (never imported), and
+  assert centring as a PROPERTY (equal opposite margins) not by re-running the renderer's offset formula.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.

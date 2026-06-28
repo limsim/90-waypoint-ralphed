@@ -8,8 +8,10 @@
 //
 //   npm run build && node scripts/verify-renderer.mjs     (or: npm run verify:renderer)
 //
-// Exits non-zero on the first failed assertion so it is usable as a gate. As US-014 (turn labels,
-// wildcard rings) and US-015 (A4 cap / downscale / centre) extend draw(), add their assertions here.
+// Exits non-zero on the first failed assertion so it is usable as a gate. US-014 (turn labels,
+// wildcard rings) and US-015 (A4 cap / uniform downscale / auto-centre) extend draw() and are
+// asserted here too — US-015 checks the recorded SCREEN coords, the complement of US-013/US-014's
+// local-coord checks.
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -24,6 +26,12 @@ const CANVAS_W = 794; // A4 @ 96 PPI — US-015 enforces this cap; here it is ju
 const CANVAS_H = 1123;
 const CELL = 60; // grid cell, generation-space px
 const PAD = 100; // padding around the waypoint bounding box, each side
+
+// US-015 AC golden values (the A4 cap). HARD-CODED from the acceptance criteria, deliberately NOT
+// imported from the renderer, so a drift in the source constants fails the gate rather than being
+// silently agreed with. The fake canvas above is sized to A4 exactly, so the fit cap == the canvas.
+const A4_W = 794;
+const A4_H = 1123;
 
 // US-014 AC values (the renderer's wildcard ring + turn label, asserted as a golden gate).
 // These are GOLDEN literals straight from the acceptance criteria — deliberately NOT imported from
@@ -45,30 +53,39 @@ assert.ok(RING_RADIUS > WAYPOINT_RADIUS, "wildcard ring radius sits outside the 
  * A recording fake `CanvasRenderingContext2D`. Every op is pushed with a snapshot of the styles
  * that are LIVE at call time (fillStyle/strokeStyle/lineWidth/font/...), captured via getter/setter
  * props so e.g. a fill() records the fillStyle as it stood when fill() ran — not some later value.
- * The translate-only transform stack is tracked exactly as canvas does, so recorded coordinates are
- * in screen space; the untransformed local coordinate is kept alongside as `lx`/`ly`.
+ *
+ * The transform stack tracks the canvas affine matrix as `{ a, d, e, f }` — uniform scale (`a`/`d`)
+ * plus translate (`e`/`f`), no rotation/skew (the renderer never uses any). It is composed exactly
+ * as canvas does, so the recorded `x`/`y` are SCREEN coordinates: `x = a·lx + e`, `y = d·ly + f`.
+ * The untransformed local (generation-space) coordinate is kept alongside as `lx`/`ly`. US-015's
+ * A4 fit introduces a real scale, so `a`/`d` are no longer 1 — screen coords (`x`/`y`) now reflect
+ * the scale + centre, while `lx`/`ly` stay in generation space (US-013/US-014 assertions use those).
  */
 function makeFakeContext() {
   const state = { fillStyle: "", strokeStyle: "", lineWidth: 0, font: "", textAlign: "", textBaseline: "", lineJoin: "", lineCap: "" };
   const ops = [];
-  let tx = 0, ty = 0;
+  let m = { a: 1, d: 1, e: 0, f: 0 };
   const stack = [];
   const snap = () => ({ ...state });
+  const sx = (x) => m.a * x + m.e;
+  const sy = (y) => m.d * y + m.f;
   const ctx = {
     canvas: { width: CANVAS_W, height: CANVAS_H },
-    save() { stack.push({ tx, ty }); ops.push({ op: "save" }); },
-    restore() { const s = stack.pop(); tx = s.tx; ty = s.ty; ops.push({ op: "restore" }); },
-    setTransform(_a, _b, _c, _d, e, f) { tx = e; ty = f; ops.push({ op: "setTransform", e, f }); },
-    translate(x, y) { tx += x; ty += y; ops.push({ op: "translate", x, y }); },
+    save() { stack.push({ ...m }); ops.push({ op: "save" }); },
+    restore() { m = stack.pop(); ops.push({ op: "restore" }); },
+    // setTransform replaces the matrix; the renderer only ever calls it as the identity reset.
+    setTransform(a, _b, _c, d, e, f) { m = { a, d, e, f }; ops.push({ op: "setTransform", a, d, e, f }); },
+    translate(x, y) { m = { ...m, e: m.a * x + m.e, f: m.d * y + m.f }; ops.push({ op: "translate", x, y }); },
+    scale(x, y) { m = { ...m, a: m.a * x, d: m.d * y }; ops.push({ op: "scale", x, y }); },
     beginPath() { ops.push({ op: "beginPath" }); },
-    moveTo(x, y) { ops.push({ op: "moveTo", x: x + tx, y: y + ty, lx: x, ly: y }); },
-    lineTo(x, y) { ops.push({ op: "lineTo", x: x + tx, y: y + ty, lx: x, ly: y }); },
-    arc(x, y, r) { ops.push({ op: "arc", x: x + tx, y: y + ty, lx: x, ly: y, r, ...snap() }); },
-    fillRect(x, y, w, h) { ops.push({ op: "fillRect", x, y, w, h, ...snap() }); },
+    moveTo(x, y) { ops.push({ op: "moveTo", x: sx(x), y: sy(y), lx: x, ly: y }); },
+    lineTo(x, y) { ops.push({ op: "lineTo", x: sx(x), y: sy(y), lx: x, ly: y }); },
+    arc(x, y, r) { ops.push({ op: "arc", x: sx(x), y: sy(y), lx: x, ly: y, r, ...snap() }); },
+    fillRect(x, y, w, h) { ops.push({ op: "fillRect", x: sx(x), y: sy(y), w: w * m.a, h: h * m.d, ...snap() }); },
     clearRect(x, y, w, h) { ops.push({ op: "clearRect", x, y, w, h }); },
     fill() { ops.push({ op: "fill", ...snap() }); },
     stroke() { ops.push({ op: "stroke", ...snap() }); },
-    fillText(text, x, y) { ops.push({ op: "fillText", text, x: x + tx, y: y + ty, lx: x, ly: y, ...snap() }); },
+    fillText(text, x, y) { ops.push({ op: "fillText", text, x: sx(x), y: sy(y), lx: x, ly: y, ...snap() }); },
   };
   for (const k of Object.keys(state)) {
     Object.defineProperty(ctx, k, { get: () => state[k], set: (v) => { state[k] = v; } });
@@ -303,6 +320,82 @@ function verifyTurnsAndWildcards(count, seed) {
   console.log(`  ✓ count=${count} seed=${seed}: ${labelled.length} turn labels, ${wildcards.length} wildcard rings, toggles independent`);
 }
 
+/**
+ * US-015: the padded content box is uniformly scaled to fit A4 (794×1123) when it exceeds those
+ * dimensions, never scaled up, and centred so the full walk is visible — a pure adapter transform
+ * that leaves the domain's generation-space coordinates untouched.
+ *
+ * Asserts from the RECORDED SCREEN coordinates (op.x/op.y), the complement of the US-013/US-014
+ * checks which read the local op.lx/op.ly. The scale is DERIVED from the output (the screen spread
+ * of two waypoints over their generation-space spread), not read from the renderer's scale op, then
+ * matched to the AC formula computed with the golden A4 constants — so a wrong cap, wrong clamp, or
+ * wrong centre is caught from first principles.
+ */
+function verifyA4Fit(count, seed) {
+  const walk = generateWalk(count, seed);
+  const ops = renderToOps(walk);
+  const box = walk.boundingBox;
+  const minX = box.minX - PAD, minY = box.minY - PAD;
+  const contentW = (box.maxX - box.minX) + 2 * PAD;
+  const contentH = (box.maxY - box.minY) + 2 * PAD;
+
+  // The AC scale: fit within A4, clamped to ≤ 1 (small walks are never enlarged).
+  const fits = contentW <= A4_W && contentH <= A4_H;
+  const expectedScale = Math.min(1, A4_W / contentW, A4_H / contentH);
+
+  // Waypoint circles carry both local (lx/ly) and screen (x/y) coordinates — the transform fingerprint.
+  const circles = ops.filter((o) => o.op === "arc" && o.r === WAYPOINT_RADIUS);
+  assert.equal(circles.length, walk.waypoints.length, "every waypoint drew a circle");
+
+  // AC5: generation-space coordinates are untouched — the local coords still equal the raw waypoints.
+  for (let i = 0; i < walk.waypoints.length; i++) {
+    const wp = walk.waypoints[i].position;
+    const hit = circles.find((o) => o.lx === wp.x && o.ly === wp.y);
+    assert.ok(hit, `wp${i + 1} circle keeps its generation-space (lx,ly) — domain coords untouched`);
+  }
+
+  // Derive the applied uniform scale from two circles' screen-vs-local spread (independent of the
+  // renderer's own scale op). Use whichever axis actually varies (a count=2 walk is vertical-only).
+  const a = circles[0], b = circles[circles.length - 1];
+  const dlx = b.lx - a.lx, dly = b.ly - a.ly;
+  const derivedScale = Math.abs(dlx) > Math.abs(dly) ? (b.x - a.x) / dlx : (b.y - a.y) / dly;
+  assert.ok(Math.abs(derivedScale - expectedScale) < 1e-9, `scale ${derivedScale} matches the A4-fit formula ${expectedScale}`);
+  assert.ok(derivedScale <= 1 + 1e-9, "scale never exceeds 1 (small walks are not enlarged)");
+  if (fits) {
+    assert.ok(Math.abs(derivedScale - 1) < 1e-9, `count=${count} fits within A4 → not scaled (scale === 1)`);
+  } else {
+    assert.ok(derivedScale < 1 - 1e-9, `count=${count} exceeds A4 → uniformly downscaled (scale < 1)`);
+  }
+
+  // First-principles position check: every circle's recorded SCREEN position must equal the A4-fit
+  // transform of its generation-space centre (scale + centre offset), computed here from the golden
+  // A4 constants and the walk's own bounding box — never by re-running the renderer's transform.
+  const offsetX = (A4_W - contentW * expectedScale) / 2;
+  const offsetY = (A4_H - contentH * expectedScale) / 2;
+  for (const o of circles) {
+    const ex = offsetX + expectedScale * (o.lx - minX);
+    const ey = offsetY + expectedScale * (o.ly - minY);
+    assert.ok(Math.abs(o.x - ex) < 1e-6, `circle screen x ${o.x} == fitted ${ex}`);
+    assert.ok(Math.abs(o.y - ey) < 1e-6, `circle screen y ${o.y} == fitted ${ey}`);
+  }
+
+  // AC1 cap: the whole padded content box lands within the A4 page after the fit.
+  const boxLeft = offsetX, boxRight = offsetX + contentW * expectedScale;
+  const boxTop = offsetY, boxBottom = offsetY + contentH * expectedScale;
+  assert.ok(boxLeft >= -1e-6 && boxRight <= A4_W + 1e-6, `content fits A4 width [${boxLeft}, ${boxRight}] ⊆ [0, ${A4_W}]`);
+  assert.ok(boxTop >= -1e-6 && boxBottom <= A4_H + 1e-6, `content fits A4 height [${boxTop}, ${boxBottom}] ⊆ [0, ${A4_H}]`);
+
+  // AC3 centre: equal margins on opposite sides (the centring PROPERTY, not the renderer's formula).
+  assert.ok(Math.abs(boxLeft - (A4_W - boxRight)) < 1e-6, "content is centred horizontally (equal L/R margins)");
+  assert.ok(Math.abs(boxTop - (A4_H - boxBottom)) < 1e-6, "content is centred vertically (equal T/B margins)");
+
+  // The background still covers the whole canvas in screen space (drawn under the identity reset).
+  const bg = ops.find((o) => o.op === "fillRect");
+  assert.ok(bg && bg.x === 0 && bg.y === 0 && bg.w === A4_W && bg.h === A4_H, "background still covers the full A4 canvas");
+
+  console.log(`  ✓ count=${count} seed=${seed}: scale=${derivedScale.toFixed(4)} (${fits ? "within A4, not enlarged" : "downscaled to fit A4"}), centred, domain coords untouched`);
+}
+
 function verifyClear() {
   const { ctx, ops } = makeFakeContext();
   const renderer = new CanvasRenderer({ width: CANVAS_W, height: CANVAS_H, getContext: () => ctx });
@@ -333,4 +426,11 @@ console.log("US-014 turn labels + wildcard rings (counts with >=1 wildcard):");
 verifyTurnsAndWildcards(10, 4242);
 verifyTurnsAndWildcards(20, 99);
 verifyTurnsAndWildcards(90, 4242);
+
+console.log("US-015 A4 cap / uniform downscale / auto-centre:");
+// count=2 + a small count fit within A4 (scale === 1, not enlarged); count=90 exceeds A4 (downscaled).
+verifyA4Fit(2, 7);
+verifyA4Fit(10, 4242);
+verifyA4Fit(20, 99);
+verifyA4Fit(90, 4242);
 console.log("ALL RENDERER ASSERTIONS PASSED");

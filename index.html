@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>90 Waypoint Map</title>
+    <style>
+      /*
+       * Viewport fit (US-015 / docs/adr/0005). The canvas backing store is capped at A4 (794×1123),
+       * but on a narrower viewport the ELEMENT is CSS-scaled down so it never overflows horizontally.
+       * `max-width: 100%` shrinks it to the available width; `height: auto` preserves the A4 aspect
+       * ratio. This is presentation only — the backing store (and the domain coordinates) are unchanged.
+       */
+      canvas {
+        display: block;
+        max-width: 100%;
+        height: auto;
+      }
+    </style>
   </head>
   <body>
     <main>

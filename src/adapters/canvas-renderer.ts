@@ -15,16 +15,28 @@ import { DisplayOptions, Renderer } from "../application/renderer-port.js";
  * US-014 adds, on top of that base picture: each interior waypoint's outbound turn label (L / R, or
  * W for a wildcard) at the fixed NE 46px-from-centre position, and an orange ring around every
  * wildcard waypoint. These two layers are toggled INDEPENDENTLY by the `DisplayOptions` — the
- * L/R/W label by `showTurns`, the orange ring by `showWildcards`. The A4 cap / uniform downscale /
- * auto-centre / viewport fit land in US-015. To keep the walk visible before US-015, `draw` applies
- * a plain translate so the padded content box starts at the canvas origin; US-015 layers the
- * scale + centre transform on top of that.
+ * L/R/W label by `showTurns`, the orange ring by `showWildcards`.
+ *
+ * US-015 adds the A4 cap / uniform downscale / auto-centre (docs/adr/0005). The padded content box
+ * is uniformly scaled DOWN to fit the A4 backing store (794×1123 @ 96 PPI) when it exceeds those
+ * dimensions, never scaled UP (small walks keep their natural size), then centred so the whole route
+ * is visible. This is a pure adapter transform built from `ctx.translate`/`ctx.scale` — the domain's
+ * generation-space coordinates are never mutated. The complementary viewport fit (CSS-scaling the
+ * canvas ELEMENT down when the window is narrower than 794px) is a stylesheet concern in index.html
+ * (`canvas { max-width: 100%; height: auto }`), not a Canvas-2D drawing transform, so it lives there.
  */
 
 /** Generation-space size of one grid cell (px). */
 const GRID_CELL = 60;
 /** Padding drawn around the waypoints' bounding box, on each side (px). */
 const GRID_PADDING = 100;
+
+/**
+ * A4 at 96 PPI (px). The rendered output is capped to a single A4 page (US-015 / docs/adr/0005): the
+ * padded content box is uniformly downscaled to fit within these dimensions when it is larger.
+ */
+const A4_WIDTH = 794;
+const A4_HEIGHT = 1123;
 
 /** Stroke widths (generation-space px; transform is 1:1 until US-015 adds scaling). */
 const SEGMENT_WIDTH = 2;
@@ -76,6 +88,11 @@ export class CanvasRenderer implements Renderer {
    * and — toggled independently by `options` — the wildcard rings (`showWildcards`) and the
    * outbound turn labels (`showTurns`). Rings are drawn before labels so a label is never occluded
    * by a ring; both sit on top of the path and circles.
+   *
+   * The padded content box is uniformly scaled to FIT the A4-capped backing store and centred
+   * within the canvas (US-015): a walk larger than A4 is shrunk to fit; a walk already within A4 is
+   * never enlarged (the scale is clamped to ≤ 1). All drawing stays in generation-space px — the
+   * scale + centre is applied purely through the canvas transform.
    */
   draw(walk: Walk, options: DisplayOptions): void {
     const { ctx, canvas } = this;
@@ -92,10 +109,22 @@ export class CanvasRenderer implements Renderer {
     const minY = box.minY - GRID_PADDING;
     const maxX = box.maxX + GRID_PADDING;
     const maxY = box.maxY + GRID_PADDING;
+    const contentW = maxX - minX; // ≥ 2*GRID_PADDING, so never zero (no divide-by-zero below)
+    const contentH = maxY - minY;
 
-    // US-013: translate the padded content box to the canvas origin so the walk is visible
-    // wherever it sits in generation space. US-015 replaces/extends this with the A4 fit transform.
+    // A4 cap + uniform downscale (US-015 / docs/adr/0005). Fit within the A4 page, never larger than
+    // the backing store, and never scale a small walk UP (clamp to ≤ 1 so walks within A4 keep size).
+    const capW = Math.min(A4_WIDTH, canvas.width);
+    const capH = Math.min(A4_HEIGHT, canvas.height);
+    const scale = Math.min(1, capW / contentW, capH / contentH);
+
+    // Auto-centre the scaled content box within the canvas so the full route is visible.
+    const offsetX = (canvas.width - contentW * scale) / 2;
+    const offsetY = (canvas.height - contentH * scale) / 2;
+
     ctx.save();
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
     ctx.translate(-minX, -minY);
 
     this.drawGrid(minX, minY, maxX, maxY);
