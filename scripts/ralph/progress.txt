@@ -348,6 +348,15 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   A bare `canvas` selector regex ALSO matches `.canvas-wrap`/`#walk-canvas`, so anchor standalone-
   `canvas` checks with a `(?<![\w.#-])` lookbehind. US-021 (composition root) must keep these print
   rules valid; US-020's error overlay, if added as new chrome, should be hidden in print too.
+  GOTCHA (print colour, US-019 refinement): browsers default to `print-color-adjust: economy`, which
+  DROPS CSS `background` colours when printing (to save ink) — borders still print. The legend's
+  Start/End swatch is a pure `background:#000000` fill with NO border, so it would print as an EMPTY
+  white circle, defeating the legend. FIX: the print block sets `.legend .swatch { -webkit-print-
+  color-adjust: exact; print-color-adjust: exact }` (prefix for old Blink/WebKit, unprefixed for the
+  spec) so the fills print. verify:controls item 7 asserts the UNPREFIXED property via a
+  `(?<!-)print-color-adjust:exact` lookbehind (the `-webkit-` prefix alone must NOT satisfy it),
+  proven to bite by dropping the standard line. Any future printed background colour needs the same;
+  a canvas bitmap is foreground content and prints regardless.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1827,4 +1836,37 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     screenshot for human sign-off is still pending. The print rules are static and apply independently
     of the JS, but only show a filled map once US-021 wires main.ts (auto-generate-on-load). The
     verify:controls item-7 markup gate stands in for the functional AC.
+---
+
+## 2026-06-28 - US-019 (Print stylesheet) — REFINEMENT
+- US-019 already passed; re-verified all acceptance criteria green (print CSS hides chrome + heading,
+  keeps map + legend, caps the A4-sized canvas onto one sheet; typecheck clean; the live print-preview
+  screenshot for human sign-off remains pending — no browser/Playwright MCP in this env).
+- Found and fixed a REAL print-correctness bug the prior passes missed: the legend swatches are CSS
+  `background` colours, and browsers default to `print-color-adjust: economy`, which STRIPS background
+  colours when printing (to save ink). The Start/End swatch is a pure `background: #000000` fill with
+  NO border, so it would have printed as an EMPTY white circle — the printed legend no longer mirrors
+  the canvas symbols, defeating the AC ("print ... the canvas and legend"). Borders still print, so the
+  Waypoint outline and Wildcard orange ring were unaffected; only the solid-fill terminal swatch broke.
+- FIX (index.html @media print block): added `.legend .swatch { -webkit-print-color-adjust: exact;
+  print-color-adjust: exact }` — the `-webkit-` prefix for older Blink/WebKit, the unprefixed property
+  for the spec — so all swatch fills print as drawn on screen.
+- GATE: extended verify:controls item 7 to assert the `.legend .swatch` rule exists in the print block
+  AND carries the UNPREFIXED `print-color-adjust: exact` (matched with a `(?<!-)` lookbehind so the
+  `-webkit-` prefix alone does NOT satisfy it — the spec-compliant property must be present). PROVEN TO
+  BITE then reverted: dropping the unprefixed line (keeping only `-webkit-`) fired the AssertionError
+  "print forces legend swatch fills to print"; the full rule passes 24/24.
+- Files changed: index.html (print-colour rule + comment), scripts/verify-controls.mjs (item-7
+  assertion), src/adapters/CLAUDE.md + scripts/ralph/progress.txt Codebase Patterns (print-colour gotcha).
+- **Learnings for future iterations:**
+  - `print-color-adjust: economy` (the browser default) DROPS CSS `background` colours/images in print;
+    BORDERS print regardless. Any printed UI relying on a `background:` fill (here the black Start/End
+    legend swatch) needs `print-color-adjust: exact` (+ `-webkit-` prefix) or it prints empty. A
+    `<canvas>` bitmap is foreground content and prints regardless — this only bites CSS backgrounds.
+  - When asserting a property whose name is a SUFFIX of a vendor-prefixed variant (`print-color-adjust`
+    ⊂ `-webkit-print-color-adjust`), use a `(?<!-)` lookbehind to require the unprefixed/spec property,
+    so the prefix alone can't satisfy the check vacuously.
+  - For a markup/CSS-only story, the highest-value refinement is auditing actual RENDER/PRINT semantics
+    (here: what browsers do to backgrounds at print time), not just adding more structural regex checks
+    — the existing gate proved the rules were PRESENT but said nothing about whether they'd print right.
 ---

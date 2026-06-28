@@ -170,6 +170,15 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   comments first so prose words ("canvas"/"display"/"max-height") can't satisfy a check vacuously. A
   bare `canvas` selector regex also matches `.canvas-wrap`/`#walk-canvas`, so anchor it with a
   `(?<![\w.#-])` lookbehind. Both new assertions proven to bite (drop `!important` / drop `max-height`).
+  GOTCHA (print colour): the legend swatches are CSS `background` colours (the Start/End swatch is a
+  pure `background: #000000` fill, NO border), and browsers default to `print-color-adjust: economy`
+  which DROPS background colours when printing — so without `print-color-adjust: exact` the black
+  Start/End swatch prints as an EMPTY white circle and the legend no longer mirrors the canvas. The
+  print block sets `.legend .swatch { -webkit-print-color-adjust: exact; print-color-adjust: exact }`
+  (the `-webkit-` prefix for older Blink/WebKit, the unprefixed for the spec). verify:controls item 7
+  asserts the unprefixed property via a `(?<!-)print-color-adjust:exact` lookbehind (so the prefix
+  alone doesn't satisfy it); proven to bite by dropping the standard line. Any future swatch / printed
+  background colour needs this too — borders (the waypoint outline, wildcard ring) print regardless.
 - CAVEAT (carried from US-013/14/15/16): a LIVE browser screenshot for human sign-off is still pending —
   no browser/Playwright MCP in this env, and the controls (incl. US-017 click/hover, which need
   `DomControls` constructed) only become interactive once US-021 wires main.ts (composition root +

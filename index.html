@@ -219,6 +219,19 @@
           margin-top: 6mm;
           page-break-inside: avoid;
         }
+
+        /*
+         * Force the swatch fills to print. Browsers default to `print-color-adjust: economy`,
+         * which strips background colours to save ink — that would print the black Start/End
+         * swatch (a CSS `background`, no border) as an EMPTY white circle, making the legend
+         * meaningless in print. `exact` keeps every swatch fill/ring as drawn on screen so the
+         * printed legend still mirrors the canvas symbols. The `-webkit-` prefix covers older
+         * Blink/WebKit which only honour the prefixed property.
+         */
+        .legend .swatch {
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
       }
     </style>
   </head>

@@ -622,6 +622,19 @@ function ok(label) {
     "print caps the canvas height (max-height) so the legend fits on the same A4 page"
   );
 
+  // The legend swatches are CSS BACKGROUND colours (the Start/End swatch is a pure `background:
+  // #000000` fill with no border). Browsers default to `print-color-adjust: economy`, which drops
+  // background colours when printing — so without `print-color-adjust: exact` the black Start/End
+  // swatch prints as an EMPTY white circle and the printed legend no longer mirrors the canvas
+  // symbols (the AC: "print ... the legend"). The lookbehind `(?<!-)` requires the STANDARD
+  // unprefixed property, not just the `-webkit-` prefix, so the spec-compliant rule is present.
+  const swatchRule = ruleFor(escapeRe(".legend .swatch"));
+  assert.ok(swatchRule, "print has a .legend .swatch rule to control swatch colour printing");
+  assert.ok(
+    /(?<!-)print-color-adjust\s*:\s*exact/i.test(swatchRule),
+    "print forces legend swatch fills to print (print-color-adjust: exact), so the black Start/End swatch isn't dropped"
+  );
+
   ok("Print stylesheet (US-019): @media print hides chrome, keeps map + legend, fits one A4 page");
 }
 
