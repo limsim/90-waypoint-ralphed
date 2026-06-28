@@ -153,6 +153,23 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   (`getBoundingClientRect`) + fake renderer (`hitTarget`/`hitArgs`/`highlights`) and reads the real
   index.html for the tooltip's overlay CSS contract; `fakeEl.dispatch(type, event)` now forwards a
   mouse event so listeners can read `clientX`/`clientY`.
+- **Print stylesheet (US-019).** Pure CSS in `index.html` — an `@media print { … }` block (no adapter
+  change), like the legend. It prints ONLY the map + legend on a single A4 page: it hides the chrome
+  (`.controls`, `#loading-overlay`, `#waypoint-tooltip`) and the `h1`, sets `@page { size: A4 }`, and
+  CAPS the canvas with `max-height` (width/height:auto preserving the A4 aspect ratio) so the legend
+  fits beneath it on the SAME sheet — the canvas backing store is A4-sized (794×1123 ≈ 210×297mm), so
+  at natural size it would fill the whole page and push the legend onto page 2. GOTCHA: the
+  overlay/tooltip hides MUST be `display: none !important`, because the adapter sets their `display`
+  via INLINE `style.display` (overlay during generation, tooltip on a waypoint click) and an inline
+  style beats a normal stylesheet rule — without `!important` an open tooltip prints over the map.
+  Its only regression gate is `verify:controls` item 7 (reads the real `index.html`): asserts the
+  `@media print` block exists, `@page size: A4`, each chrome/`h1` selector is `display:none` (overlay
+  + tooltip with `!important`), the legend + canvas are NOT hidden, and the canvas has a `max-height`
+  cap. GOTCHA parsing it: `@media`/`@page` NEST braces, so a flat `selector { [^}]* }` regex stops at
+  the first inner `}` — balance braces from the opening `{` to extract the block, and strip CSS
+  comments first so prose words ("canvas"/"display"/"max-height") can't satisfy a check vacuously. A
+  bare `canvas` selector regex also matches `.canvas-wrap`/`#walk-canvas`, so anchor it with a
+  `(?<![\w.#-])` lookbehind. Both new assertions proven to bite (drop `!important` / drop `max-height`).
 - CAVEAT (carried from US-013/14/15/16): a LIVE browser screenshot for human sign-off is still pending —
   no browser/Playwright MCP in this env, and the controls (incl. US-017 click/hover, which need
   `DomControls` constructed) only become interactive once US-021 wires main.ts (composition root +

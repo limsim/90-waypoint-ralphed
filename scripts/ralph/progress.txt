@@ -331,6 +331,23 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   `<ul id="legend">…</ul>` via `html.match(/<ul\b[^>]*\bid=["']legend["'][\s\S]*?<\/ul>/i)[0]`, split
   its `<li>`s, assert EXACTLY three (the AC count), and pair each AC swatch CLASS with its label
   INSIDE one <li> — proving the swatch sits on the right entry, not merely that the class exists in CSS.
+- The print stylesheet (US-019) is STATIC CSS in index.html ONLY — an `@media print { … }` block
+  appended to the existing <style> (no adapter/TS change, like the legend). It prints ONLY the map +
+  legend on one A4 page: `@page { size: A4 portrait; margin: 12mm }`; hide chrome + heading with
+  `h1, .controls, #loading-overlay, #waypoint-tooltip { display: none !important }`; KEEP the legend;
+  and CAP the canvas (`max-height`, with width/height:auto so the A4 aspect ratio holds) so the legend
+  fits beneath it on the SAME sheet. WHY max-height: the canvas backing store is A4-sized (794×1123 ≈
+  210×297mm), so at natural size it fills the whole page and pushes the legend to page 2. WHY
+  `!important`: the dom-controls adapter sets INLINE `style.display` on the overlay (during generation)
+  and the tooltip (on a waypoint click); an inline style beats a normal stylesheet rule, so a non-
+  important hide would let an open tooltip print over the map. Its ONLY regression gate is
+  `verify:controls` item 7 (reads the real index.html). GOTCHA writing that gate: `@media`/`@page` NEST
+  braces, so a flat `selector{[^}]*}` regex stops at the first INNER `}` — balance braces from the
+  opening `{` to extract the whole block, and strip CSS comments first (`replace(/\/\*[\s\S]*?\*\//g,
+  "")`) so prose words ("canvas"/"display"/"max-height") in comments can't satisfy a check vacuously.
+  A bare `canvas` selector regex ALSO matches `.canvas-wrap`/`#walk-canvas`, so anchor standalone-
+  `canvas` checks with a `(?<![\w.#-])` lookbehind. US-021 (composition root) must keep these print
+  rules valid; US-020's error overlay, if added as new chrome, should be hidden in print too.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1766,4 +1783,48 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     here the claim had been false across two prior "refinement" passes.
   - The renderer colour constants are PRIVATE module consts (not exported), so the gate greps the .ts
     SOURCE (`/\bNAME\s*=\s*["']([^"']*)["']/i`), not the compiled dist — runtime import would fail.
+---
+
+## 2026-06-28 - US-019 (Print stylesheet (single A4 page))
+- Implemented the print stylesheet: an `@media print { … }` block appended to the existing <style>
+  in index.html. Pure CSS, markup-only — no adapter/TS change (the same shape as the US-018 legend).
+  Prints ONLY the map + legend on a single A4 page:
+  - `@page { size: A4 portrait; margin: 12mm }` — caps the sheet at A4.
+  - `h1, .controls, #loading-overlay, #waypoint-tooltip { display: none !important }` — hides all
+    other chrome and the page heading. `!important` is load-bearing: the dom-controls adapter sets
+    INLINE `style.display` on the overlay (during generation) and the tooltip (on a waypoint click),
+    and an inline style beats a normal stylesheet rule — without it an open tooltip prints over the map.
+  - The legend is KEPT (`.legend { margin-top: 6mm; page-break-inside: avoid }`) and printed below the map.
+  - `canvas { max-width:100%; max-height:245mm; width:auto; height:auto; border:1px solid #999 }` —
+    the canvas backing store is A4-sized (794×1123 ≈ 210×297mm), so at natural size it fills the whole
+    page and pushes the legend to page 2. The `max-height` cap shrinks it (preserving the A4 aspect
+    ratio) so the legend fits beneath it on the SAME sheet (≈245mm map + 6mm gap + ~8mm legend ≈ 259mm,
+    under the 273mm printable height at 12mm margins). `main { page-break-inside: avoid }` keeps them together.
+- Files changed:
+  - index.html (added the `@media print` block to <style>)
+  - scripts/verify-controls.mjs (item 7 in the index.html-markup block: the print-stylesheet gate)
+  - src/adapters/CLAUDE.md (print-stylesheet note in the dom-controls section)
+  - scripts/ralph/prd.json (US-019 passes:true + notes), scripts/ralph/progress.txt (this entry + a pattern)
+- Verified: `npm run clean` + `tsc -b` clean (typecheck); `npm test` 243 pass (no regressions — the
+  print CSS is markup-only, no test imports it); `npm run verify:renderer` green; `npm run verify:controls`
+  24/24 (was 23 + the new print check). Both new print assertions PROVEN TO BITE then reverted via
+  precise Edits: dropping `!important` → "#loading-overlay hide is !important" AssertionError; dropping
+  `max-height` → "print caps the canvas height" AssertionError; restored → 24/24.
+- **Learnings for future iterations:**
+  - A print stylesheet is the same markup-only pattern as the legend: static CSS in index.html, with
+    `verify:controls`' real-index.html block as its only regression gate (adapters/markup aren't in
+    `npm test`). Add a numbered item to that block; hard-code AC golden values; prove it bites.
+  - The canvas is A4-sized, so printing the map AND the legend on ONE page REQUIRES capping the canvas
+    height (`max-height`) — full-size canvas alone fills the page. Don't just hide chrome and hope.
+  - Hide rules over adapter-controlled elements need `!important`: the overlay (#loading-overlay) and
+    tooltip (#waypoint-tooltip) carry INLINE `style.display` set by dom-controls, which a non-important
+    stylesheet rule can't override. Any future print-hidden element the adapter styles inline needs it too.
+  - GOTCHA parsing CSS in the gate: `@media`/`@page` NEST braces, so a flat `selector{[^}]*}` regex
+    stops at the first inner `}`. Balance braces from the opening `{` to extract the block, and strip
+    CSS comments (`/\/\*[\s\S]*?\*\//g`) first so prose words can't satisfy a check vacuously. A bare
+    `canvas` regex matches `.canvas-wrap`/`#walk-canvas` too — anchor it with a `(?<![\w.#-])` lookbehind.
+  - CAVEAT (carried from US-013..018): no browser/Playwright MCP here, so the LIVE print-preview
+    screenshot for human sign-off is still pending. The print rules are static and apply independently
+    of the JS, but only show a filled map once US-021 wires main.ts (auto-generate-on-load). The
+    verify:controls item-7 markup gate stands in for the functional AC.
 ---

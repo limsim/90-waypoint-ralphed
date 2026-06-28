@@ -564,6 +564,65 @@ function ok(label) {
     assert.equal(rendererColour(name), want, `canvas-renderer ${name} is ${want} — legend swatch mirrors it (keep in sync)`);
   }
   ok("Legend (US-018): DOM/HTML below the canvas, three entries, swatches mirror the canvas colours");
+
+  // 7. Print stylesheet (US-019): an @media print block prints ONLY the map + legend on a single A4
+  //    page. All other chrome (the controls, the loading overlay, the click tooltip) and the page
+  //    heading are HIDDEN; the legend is KEPT; and the A4-sized canvas is capped so both fit on one
+  //    sheet. This is a pure-CSS, markup-only feature (no adapter change), so — exactly like the
+  //    legend (item 6) — this real-index.html assertion is its only regression gate.
+  //
+  //    @media / @page rules NEST braces, so a flat `[^}]*` body regex stops at the first inner `}`.
+  //    Balance braces from the opening `{` to get the whole block, then strip CSS comments so prose
+  //    words like "canvas"/"display"/"max-height" can't satisfy a check vacuously.
+  const blockFrom = (css, openBraceIdx) => {
+    let depth = 0;
+    for (let i = openBraceIdx; i < css.length; i++) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}" && --depth === 0) return css.slice(openBraceIdx, i + 1);
+    }
+    return null;
+  };
+  const printAt = html.search(/@media\s+print\b/i);
+  assert.ok(printAt !== -1, "index.html has an @media print stylesheet (US-019)");
+  const printBlock = (blockFrom(html, html.indexOf("{", printAt)) ?? "").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.ok(printBlock, "the @media print block has balanced braces");
+
+  // Single A4 page: the page box is sized to A4 (so the printout is one A4 sheet).
+  assert.ok(/@page[^{]*\{[^}]*size\s*:\s*a4/i.test(printBlock), "@media print sets @page size: A4 (single A4 page)");
+
+  // The rule (selector list + body) a given selector belongs to, within the print block.
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const ruleFor = (selectorRe) => printBlock.match(new RegExp(`${selectorRe}[^{}]*\\{[^}]*\\}`, "i"))?.[0] ?? null;
+
+  // Chrome + heading hidden in print. The overlay/tooltip hides MUST be !important: the adapter sets
+  // their display via INLINE style (overlay during generation, tooltip on a waypoint click), which
+  // would otherwise beat the stylesheet and print a stuck overlay / an open tooltip over the map.
+  const mustImportant = new Set(["#loading-overlay", "#waypoint-tooltip"]);
+  for (const selector of [".controls", "#loading-overlay", "#waypoint-tooltip", "h1"]) {
+    const rule = ruleFor(escapeRe(selector));
+    assert.ok(rule && /display\s*:\s*none/i.test(rule), `${selector} is hidden in print (display: none)`);
+    if (mustImportant.has(selector)) {
+      assert.ok(/display\s*:\s*none\s*!important/i.test(rule), `${selector} hide is !important (beats the adapter's inline style.display)`);
+    }
+  }
+
+  // The legend + canvas are KEPT (NOT hidden) in print — that's what separates them from the chrome
+  // above (AC: "the map and legend ... all OTHER UI chrome hidden"). `canvas` needs a leading
+  // boundary so it doesn't match `.canvas-wrap` / `#walk-canvas`.
+  for (const selectorRe of [escapeRe(".legend"), "(?<![\\w.#-])canvas"]) {
+    const rule = ruleFor(selectorRe);
+    assert.ok(!rule || !/display\s*:\s*none/i.test(rule), `${selectorRe} is NOT hidden in print (map + legend are kept)`);
+  }
+
+  // The canvas backing store is A4-sized (794×1123 ≈ 210×297mm), so at natural size it fills the
+  // whole page and pushes the legend onto a second sheet. Capping its height is the single-A4-page
+  // mechanism (with width/height:auto preserving the A4 aspect ratio).
+  assert.ok(
+    /(?<![\w.#-])canvas[^{}]*\{[^}]*max-height/i.test(printBlock),
+    "print caps the canvas height (max-height) so the legend fits on the same A4 page"
+  );
+
+  ok("Print stylesheet (US-019): @media print hides chrome, keeps map + legend, fits one A4 page");
 }
 
 // ── US-017: clicking a waypoint shows the DOM-overlay tooltip with number / turn / distance ──

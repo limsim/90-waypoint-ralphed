@@ -157,6 +157,69 @@
         background: transparent;
         border: 3px solid #ff8c00;
       }
+
+      /*
+       * Print stylesheet (US-019). Print just the map + legend on a single A4 page: hide all
+       * interactive chrome (the controls, the loading overlay, the click tooltip) and the page
+       * heading, cap the sheet at A4, and shrink the canvas so the legend fits beneath it on the
+       * SAME page.
+       *
+       * The hide rules use `!important` deliberately: the DOM controls adapter
+       * (src/adapters/dom-controls.ts) sets INLINE `style.display` on the loading overlay (during
+       * generation) and the tooltip (when a waypoint is clicked). An inline style wins over a normal
+       * stylesheet rule, so without `!important` an open tooltip — or a stuck overlay — would print.
+       */
+      @media print {
+        /* Cap the sheet at A4 with a modest margin so the printout is always a single A4 page. */
+        @page {
+          size: A4 portrait;
+          margin: 12mm;
+        }
+
+        /* Hide everything that isn't the map or the legend. */
+        h1,
+        .controls,
+        #loading-overlay,
+        #waypoint-tooltip {
+          display: none !important;
+        }
+
+        html,
+        body {
+          margin: 0;
+          padding: 0;
+        }
+
+        /* Keep the whole map + legend together; never split them across pages. */
+        main {
+          page-break-inside: avoid;
+        }
+
+        .canvas-wrap {
+          display: block;
+          max-width: 100%;
+        }
+
+        /*
+         * The canvas backing store is A4-sized (794×1123 ≈ 210×297mm), so at natural size it would
+         * fill the entire page and push the legend onto a second sheet. Capping its height (with
+         * width/height:auto preserving the A4 aspect ratio) shrinks the map so the legend fits
+         * beneath it on the same page — this max-height is the single-A4-page mechanism.
+         */
+        canvas {
+          border: 1px solid #999;
+          max-width: 100%;
+          max-height: 245mm;
+          width: auto;
+          height: auto;
+        }
+
+        /* The legend stays — print it compactly below the map (the AC: "the map and legend"). */
+        .legend {
+          margin-top: 6mm;
+          page-break-inside: avoid;
+        }
+      }
     </style>
   </head>
   <body>
