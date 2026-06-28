@@ -44,6 +44,12 @@ const TURN_LABEL_COLOUR = "#222222"; // L / R / W ink
 const TURN_LABEL_FONT = "bold 16px Arial";
 const TURN_LABELS = new Set(["L", "R", "W"]);
 
+// US-017 AC golden values (hover highlight), HARD-CODED from the acceptance criteria — not imported,
+// so a drift in the source constants is caught here rather than silently agreed with.
+const SEGMENT_COLOUR = "#222222"; // path ink (the hover-thickened segments use the same dark ink)
+const HIGHLIGHT_SEGMENT_WIDTH = 4; // AC: hovered waypoint's connecting segments "thicken to 4px"
+const HIGHLIGHT_SHADOW_BLUR = 8; // hovered waypoint's circle gains a drop shadow (non-zero blur)
+
 // AC: the wildcard ring is drawn "at radius 30px OUTSIDE the centre" — i.e. it sits clear of the
 // waypoint circle (radius 25). A one-time golden invariant so a future tweak that shrank the ring
 // inside the circle (or grew the circle past it) is caught immediately.
@@ -62,7 +68,8 @@ assert.ok(RING_RADIUS > WAYPOINT_RADIUS, "wildcard ring radius sits outside the 
  * the scale + centre, while `lx`/`ly` stay in generation space (US-013/US-014 assertions use those).
  */
 function makeFakeContext(canvasW = CANVAS_W, canvasH = CANVAS_H) {
-  const state = { fillStyle: "", strokeStyle: "", lineWidth: 0, font: "", textAlign: "", textBaseline: "", lineJoin: "", lineCap: "" };
+  // Shadow props are tracked too (US-017 hover drop shadow); they snapshot like the other styles.
+  const state = { fillStyle: "", strokeStyle: "", lineWidth: 0, font: "", textAlign: "", textBaseline: "", lineJoin: "", lineCap: "", shadowColor: "", shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0 };
   const ops = [];
   let m = { a: 1, d: 1, e: 0, f: 0 };
   const stack = [];
@@ -71,8 +78,13 @@ function makeFakeContext(canvasW = CANVAS_W, canvasH = CANVAS_H) {
   const sy = (y) => m.d * y + m.f;
   const ctx = {
     canvas: { width: canvasW, height: canvasH },
-    save() { stack.push({ ...m }); ops.push({ op: "save" }); },
-    restore() { m = stack.pop(); ops.push({ op: "restore" }); },
+    // save/restore model the FULL drawing state (matrix + styles), exactly as a real 2D context does,
+    // so the US-017 hover drop shadow is correctly SCOPED to the highlighted circle (its own
+    // save/restore) and does not bleed onto later circles or the number — a matrix-only restore would
+    // leak the shadow and silently pass a regression. Object.assign keeps the same `state` reference
+    // the getters/setters close over.
+    save() { stack.push({ m: { ...m }, state: { ...state } }); ops.push({ op: "save" }); },
+    restore() { const top = stack.pop(); m = top.m; Object.assign(state, top.state); ops.push({ op: "restore" }); },
     // setTransform replaces the matrix; the renderer only ever calls it as the identity reset.
     setTransform(a, _b, _c, d, e, f) { m = { a, d, e, f }; ops.push({ op: "setTransform", a, d, e, f }); },
     translate(x, y) { m = { ...m, e: m.a * x + m.e, f: m.d * y + m.f }; ops.push({ op: "translate", x, y }); },
@@ -475,6 +487,113 @@ function verifyA4CapOnLargerCanvas(count, seed) {
   console.log(`  ✓ count=${count} seed=${seed}: capped at A4 (scale ${derivedScale.toFixed(4)}) on a ${bigW}×${bigH} canvas — not enlarged to fill it; centred`);
 }
 
+/**
+ * US-017 hit-testing: a viewport (client) coordinate maps back to the waypoint under it by inverting
+ * BOTH transforms — the canvas element's CSS scale (viewport → backing store, from
+ * getBoundingClientRect) and the A4 fit (backing store → generation space). Drives the REAL renderer:
+ * for every waypoint it takes the recorded SCREEN (backing-store) centre, converts it to a CLIENT
+ * coordinate through the given rect (which may be CSS-scaled and offset — that is exactly what hitTest
+ * must undo), and asserts hitTest returns that waypoint. A half-size, offset rect exercises the
+ * viewport-scale inversion; an A4-downscaled walk (count=90) exercises the A4-fit inversion. Also
+ * asserts a click over empty canvas → null.
+ */
+function verifyHitTest(count, seed, rect) {
+  const walk = generateWalk(count, seed);
+  const { ctx, ops } = makeFakeContext();
+  const canvas = { width: CANVAS_W, height: CANVAS_H, getContext: () => ctx, getBoundingClientRect: () => rect };
+  const renderer = new CanvasRenderer(canvas);
+  renderer.draw(walk, { showWildcards: true, showTurns: true });
+
+  const scaleX = rect.width / CANVAS_W; // CSS element scale (backing store px → displayed px)
+  const scaleY = rect.height / CANVAS_H;
+  for (const wp of walk.waypoints) {
+    const circle = ops.find((o) => o.op === "arc" && o.r === WAYPOINT_RADIUS && o.lx === wp.position.x && o.ly === wp.position.y);
+    assert.ok(circle, `wp${wp.sequenceNumber} drew a circle (recorded screen centre)`);
+    // backing-store screen centre → client coordinate (the inverse of what hitTest must undo).
+    const clientX = rect.left + circle.x * scaleX;
+    const clientY = rect.top + circle.y * scaleY;
+    const hit = renderer.hitTest(clientX, clientY);
+    assert.ok(hit, `hitTest returns a waypoint at wp${wp.sequenceNumber}'s screen centre`);
+    assert.equal(hit.sequenceNumber, wp.sequenceNumber, `hitTest maps the click back to wp${wp.sequenceNumber} (inverts viewport→A4→generation)`);
+  }
+  // The canvas's top-left corner maps to a generation point at least one padding (100px) outside the
+  // waypoints' bounding box, so it is over no waypoint → null.
+  assert.equal(renderer.hitTest(rect.left, rect.top), null, "a click over empty canvas returns null");
+
+  console.log(`  ✓ count=${count} seed=${seed} rect ${rect.width}×${rect.height}@(${rect.left},${rect.top}): every waypoint hit-tested back, empty→null`);
+}
+
+/**
+ * US-017 hover highlight: highlight(wp) re-renders with the waypoint's incident segments thickened to
+ * 4px and a drop shadow on its circle, scoped so it bleeds onto neither later circles nor the number;
+ * highlight(null) clears the emphasis; highlight before any draw is a no-op. Asserts from recorded ops.
+ */
+function verifyHighlight(count, seed) {
+  const walk = generateWalk(count, seed);
+  const { ctx, ops } = makeFakeContext();
+  const canvas = { width: CANVAS_W, height: CANVAS_H, getContext: () => ctx, getBoundingClientRect: () => ({ left: 0, top: 0, width: CANVAS_W, height: CANVAS_H }) };
+  const renderer = new CanvasRenderer(canvas);
+  renderer.draw(walk, { showWildcards: true, showTurns: true });
+
+  const n = walk.waypoints.length;
+  const idx = walk.waypoints.findIndex((w) => w.isInterior); // interior → two incident segments
+  const wp = walk.waypoints[idx];
+  ops.length = 0; // capture only the highlight re-render
+  renderer.highlight(wp);
+
+  // 1. Incident segments thickened to 4px in dark ink, tracing prev→wp and wp→next.
+  const thick = ops.find((o) => o.op === "stroke" && o.strokeStyle === SEGMENT_COLOUR && o.lineWidth === HIGHLIGHT_SEGMENT_WIDTH);
+  assert.ok(thick, "highlighted waypoint's connecting segments are stroked at 4px");
+  const ti = ops.indexOf(thick);
+  let tb = ti;
+  while (tb >= 0 && ops[tb].op !== "beginPath") tb--;
+  const tpts = ops.slice(tb, ti).filter((o) => o.op === "moveTo" || o.op === "lineTo");
+  const incident = [];
+  if (idx > 0) incident.push([walk.waypoints[idx - 1].position, wp.position]);
+  if (idx < n - 1) incident.push([wp.position, walk.waypoints[idx + 1].position]);
+  assert.equal(tpts.length, incident.length * 2, `thick path traces ${incident.length} incident segment(s)`);
+  incident.forEach(([from, to], k) => {
+    const mv = tpts[k * 2], ln = tpts[k * 2 + 1];
+    assert.ok(mv.op === "moveTo" && mv.lx === from.x && mv.ly === from.y, `incident segment ${k} starts at its 'from' waypoint`);
+    assert.ok(ln.op === "lineTo" && ln.lx === to.x && ln.ly === to.y, `incident segment ${k} ends at its 'to' waypoint`);
+  });
+
+  // 2. The drop shadow is on the highlighted circle's fill, and SCOPED — the number drawn right after
+  //    carries no shadow, and the NEXT waypoint's circle (drawn later) carries none either.
+  const arcIdx = ops.findIndex((o) => o.op === "arc" && o.r === WAYPOINT_RADIUS && o.lx === wp.position.x && o.ly === wp.position.y);
+  const hlFill = ops.slice(arcIdx).find((o) => o.op === "fill");
+  assert.equal(hlFill.shadowBlur, HIGHLIGHT_SHADOW_BLUR, "highlighted circle fill has the drop-shadow blur");
+  assert.ok(hlFill.shadowColor !== "", "highlighted circle fill has a shadow colour");
+  const hlText = ops.find((o) => o.op === "fillText" && o.lx === wp.position.x && o.ly === wp.position.y);
+  assert.equal(hlText.shadowBlur, 0, "the highlighted waypoint's number carries no shadow (crisp)");
+  const next = walk.waypoints[idx + 1]; // drawn AFTER the highlighted one → catches shadow bleed
+  const nextArc = ops.findIndex((o) => o.op === "arc" && o.r === WAYPOINT_RADIUS && o.lx === next.position.x && o.ly === next.position.y);
+  const nextFill = ops.slice(nextArc).find((o) => o.op === "fill");
+  assert.equal(nextFill.shadowBlur, 0, "a later, non-highlighted circle has no drop shadow (shadow scoped)");
+
+  // 3. highlight(null) clears the emphasis.
+  ops.length = 0;
+  renderer.highlight(null);
+  assert.ok(!ops.some((o) => o.op === "stroke" && o.lineWidth === HIGHLIGHT_SEGMENT_WIDTH), "highlight(null) draws no 4px segments");
+  assert.ok(!ops.some((o) => o.op === "fill" && o.shadowBlur > 0), "highlight(null) draws no shadowed circle");
+
+  // 4. highlight is a no-op before any draw (no current walk to re-render).
+  const { ctx: ctx2, ops: ops2 } = makeFakeContext();
+  const fresh = new CanvasRenderer({ width: CANVAS_W, height: CANVAS_H, getContext: () => ctx2, getBoundingClientRect: () => ({ left: 0, top: 0, width: CANVAS_W, height: CANVAS_H }) });
+  fresh.highlight(wp);
+  assert.equal(ops2.length, 0, "highlight before any draw is a no-op");
+
+  console.log(`  ✓ count=${count} seed=${seed}: wp${wp.sequenceNumber} highlight = 4px incident segments + scoped drop shadow; cleared by highlight(null)`);
+}
+
+/** US-017: hitTest before any draw (no walk / no transform yet) returns null rather than throwing. */
+function verifyHitTestBeforeDraw() {
+  const { ctx } = makeFakeContext();
+  const renderer = new CanvasRenderer({ width: CANVAS_W, height: CANVAS_H, getContext: () => ctx, getBoundingClientRect: () => ({ left: 0, top: 0, width: CANVAS_W, height: CANVAS_H }) });
+  assert.equal(renderer.hitTest(100, 100), null, "hitTest before any draw returns null");
+  console.log("  ✓ hitTest before any draw returns null (no walk / transform yet)");
+}
+
 function verifyClear() {
   const { ctx, ops } = makeFakeContext();
   const renderer = new CanvasRenderer({ width: CANVAS_W, height: CANVAS_H, getContext: () => ctx });
@@ -529,4 +648,15 @@ console.log(`  ✓ downscale coverage spans both binding axes: ${[...downscaleBi
 console.log("US-015 A4 cap holds on a canvas LARGER than A4 (cap is A4, not the canvas):");
 // count=90 exceeds A4, so the A4 cap downscales even though the walk would fit the larger canvas at 1:1.
 verifyA4CapOnLargerCanvas(90, 4242);
+
+console.log("US-017 hit-testing (invert viewport→A4→generation) + hover highlight:");
+// count=10 fits A4 at natural size (scale 1) — proves the viewport inversion alone; count=90 is
+// A4-downscaled — proves the A4-fit inversion. A half-size, offset rect proves the CSS element-scale
+// inversion (the canvas displayed smaller than its 794×1123 backing store on a narrow viewport).
+verifyHitTest(10, 4242, { left: 0, top: 0, width: CANVAS_W, height: CANVAS_H });
+verifyHitTest(90, 4242, { left: 0, top: 0, width: CANVAS_W, height: CANVAS_H });
+verifyHitTest(90, 4242, { left: 37, top: 21, width: CANVAS_W / 2, height: CANVAS_H / 2 }); // CSS-scaled + offset
+verifyHitTestBeforeDraw();
+verifyHighlight(20, 99);
+verifyHighlight(90, 4242);
 console.log("ALL RENDERER ASSERTIONS PASSED");

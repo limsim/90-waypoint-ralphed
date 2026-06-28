@@ -22,6 +22,44 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   as canvas would, so the SVG is derived from the real output, not a reimplementation) and rasterize
   with `qlmanage -t -s 1123 -o <dir> file.svg` (macOS QuickLook; no rsvg/imagemagick needed).
 
+## interactive-renderer.ts + pointer interaction (US-017)
+- **Where hit-testing / hover live.** Mapping a screen point back to a waypoint, and the hover
+  drop-shadow/thick-segment emphasis, are **canvas/view** concerns — no application use case picks or
+  hovers. So they are NOT on the application `Renderer` port (keeping that the minimal "draw a Walk"
+  contract that `GenerateWalk`/`ClearWalk` and their core-test fakes depend on). They live on
+  `InteractiveRenderer extends Renderer` in `src/adapters/interactive-renderer.ts`:
+  `hitTest(clientX, clientY): Waypoint | null` and `highlight(waypoint | null): void`. Signatures use
+  only numbers + a domain `Waypoint` (no DOM types leak), so `DomControls` depends on the interface and
+  is unit-testable with a fake. `CanvasRenderer implements InteractiveRenderer`; `DomControlsDeps.renderer`
+  is an `InteractiveRenderer`. Do NOT add these to the application port — adding a method there forces
+  every `Renderer` fake (e.g. `tests/clear-walk.test.ts`) to grow for a capability it never uses.
+- **hitTest inverts BOTH transforms** (AC: "viewport → A4 → generation"): (1) the canvas element's CSS
+  scale — `getBoundingClientRect()` gives the displayed rect, which on a narrow viewport is smaller than
+  the 794×1123 backing store (`canvas { max-width: 100% }`), so `backing = (client − rect.origin) /
+  rect.size * canvas.size`; (2) the A4 fit — `gen = (backing − offset) / scale + min`, inverting the
+  `translate→scale→translate` `draw` applies. `CanvasRenderer` therefore REMEMBERS the last walk +
+  the fit `{scale, offsetX, offsetY, minX, minY}` (set in the shared `render()`, nulled in `clear()`),
+  and finds the nearest waypoint within `WAYPOINT_RADIUS`. Returns null before any draw / over empty
+  canvas. The layout invariant (circles ≥ 50px apart) makes the hit unique.
+- **draw/highlight share one `render()`.** `draw(walk, options)` stores walk+options, resets the
+  highlight (a fresh picture has no hover), and calls `render()`; `highlight(wp|null)` sets the hover
+  and calls `render()` (no-op if no walk). `render()` computes + stores the fit ONCE. The hovered
+  waypoint's incident segments are redrawn at 4px AFTER the base 2px path but BEFORE the circles (so
+  circles cover the endpoints); its circle gets a drop shadow SCOPED in its own `ctx.save()/restore()`
+  so it never bleeds onto later circles or the number (the number is drawn after the restore, crisp).
+- **verify:renderer** gained `verifyHitTest` (drives the REAL renderer: takes each waypoint's recorded
+  SCREEN centre, converts it to a client coord via a given rect — incl. a HALF-SIZE, OFFSET rect to
+  exercise the CSS-scale inversion, and an A4-downscaled count=90 to exercise the fit inversion — and
+  asserts `hitTest` returns that waypoint; plus empty→null and before-draw→null) and `verifyHighlight`
+  (4px incident-segment path through the right neighbours; drop shadow on the highlighted fill but NOT
+  the number nor a LATER circle — catches shadow bleed; `highlight(null)` clears; before-draw no-op).
+  GOTCHA: this required `makeFakeContext`'s `save`/`restore` to model the FULL state stack (matrix +
+  styles incl. the new `shadow*` keys), not just the matrix — a matrix-only restore leaks the shadow
+  and silently passes the scoping regression. Both gates were proven to bite (drop the rect-scale
+  division → the half-rect hitTest fails; unscope the shadow → the "number carries no shadow" check
+  fails) then reverted. NB: revert a proof-of-bite with a precise Edit, NOT `git checkout <file>` — the
+  file is uncommitted, so checkout wipes the WHOLE story's edits, not just the temporary one.
+
 ## dom-controls.ts (US-016)
 - The INPUT boundary of the hexagon: owns all interactive chrome (Generate / Clear / Print buttons,
   the waypoint-count input, the Show Wildcards / Show Turns toggles) and translates gestures into
@@ -84,10 +122,29 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   the harness, NOT imported, so a drift in the markup fails the gate. Proven to bite (rename an id /
   change the default / drop `checked` / remove the keyframes → the gate fails; reverted). When you
   ADD/RENAME a control id or change its AC-mandated markup, update BOTH `index.html` and this check.
-- CAVEAT (carried from US-013/14/15): a LIVE browser screenshot for human sign-off is still pending —
-  no browser/Playwright MCP in this env, and the controls only become interactive once US-021 wires
-  main.ts (composition root + auto-generate-on-load). The headless harness stands in for the functional
-  ACs; the screenshot is a review gate, not a code defect.
+- **Pointer interaction + tooltip (US-017).** `DomControls` also owns the canvas (`#walk-canvas`) and a
+  DOM-overlay tooltip (`#waypoint-tooltip`) — both added to `CONTROL_IDS`/`DomControlsElements` and
+  resolved by `fromDocument`. It listens on the canvas for `click` (→ `renderer.hitTest` → show the
+  tooltip for the waypoint, or dismiss it over empty canvas), `mousemove` (→ hit-test → set cursor
+  `pointer`/`default` + `renderer.highlight(wp|null)`; only on a CHANGE of hovered waypoint, so a
+  90-waypoint walk is not re-rendered every pixel) and `mouseleave` (→ clear hover). The tooltip's
+  three facts (number / turn direction L·R·Wildcard / cumulative distance) come from the domain
+  `Waypoint` + `walk.cumulativeDistanceTo(seq-1)` — the distance is GENERATION-space px so it is stable
+  across redraws/resizes. Tooltip dismissed on Clear and Generate (both route through `clear()`, which
+  now also `hideTooltip()` + `clearHover()`); it SURVIVES a toggle redraw because it is a separate DOM
+  element `rerender()` never touches (rerender re-applies the hover highlight after the draw, since a
+  fresh `draw` resets the renderer's highlight). The MARKUP + CSS live in index.html
+  (`#waypoint-tooltip { position:absolute; display:none; pointer-events:none; white-space:pre-line }` —
+  `pointer-events:none` so it can't swallow the next canvas click; `pre-line` renders the adapter's
+  `\n`-joined text as lines). `verify:controls` drives all of this with a fake canvas
+  (`getBoundingClientRect`) + fake renderer (`hitTarget`/`hitArgs`/`highlights`) and reads the real
+  index.html for the tooltip's overlay CSS contract; `fakeEl.dispatch(type, event)` now forwards a
+  mouse event so listeners can read `clientX`/`clientY`.
+- CAVEAT (carried from US-013/14/15/16): a LIVE browser screenshot for human sign-off is still pending —
+  no browser/Playwright MCP in this env, and the controls (incl. US-017 click/hover, which need
+  `DomControls` constructed) only become interactive once US-021 wires main.ts (composition root +
+  auto-generate-on-load). The headless harnesses stand in for the functional ACs; the screenshot is a
+  review gate, not a code defect.
 
 ## canvas-renderer.ts (US-013+)
 - Implements the `Renderer` port (`src/application/renderer-port.ts`): `draw(walk, options)` + `clear()`.

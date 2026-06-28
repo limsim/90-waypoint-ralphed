@@ -1,8 +1,11 @@
 import { Walk } from "../domain/walk.js";
+import { Waypoint } from "../domain/waypoint.js";
+import { Turn } from "../domain/turn.js";
 import { RandomSource } from "../domain/random-source.js";
-import { DisplayOptions, Renderer } from "../application/renderer-port.js";
+import { DisplayOptions } from "../application/renderer-port.js";
 import { GenerateWalk } from "../application/generate-walk.js";
 import { ClearWalk } from "../application/clear-walk.js";
+import { InteractiveRenderer } from "./interactive-renderer.js";
 
 /**
  * DOM control-surface adapter (docs/adr/0003).
@@ -39,13 +42,18 @@ export const CONTROL_IDS = {
   turnsToggle: "toggle-turns",
   printButton: "print-button",
   loadingOverlay: "loading-overlay",
+  canvas: "walk-canvas",
+  tooltip: "waypoint-tooltip",
 } as const;
+
+/** Offset (px) of the tooltip's top-left from the click point, so it sits clear of the cursor. */
+const TOOLTIP_OFFSET = 12;
 
 /** Collaborators injected by the composition root (US-021). */
 export interface DomControlsDeps {
   readonly generateWalk: GenerateWalk;
   readonly clearWalk: ClearWalk;
-  readonly renderer: Renderer;
+  readonly renderer: InteractiveRenderer;
   /**
    * Produces a fresh {@link RandomSource} for each generation. US-021 supplies an entropy-seeded
    * source by default; US-022 supplies a `?seed=`-derived one. Keeping it a factory (not a single
@@ -64,11 +72,18 @@ export interface DomControlsElements {
   readonly turnsToggle: HTMLInputElement;
   readonly printButton: HTMLButtonElement;
   readonly loadingOverlay: HTMLElement;
+  /** The canvas the renderer draws to; this adapter listens here for click/hover and sets the cursor. */
+  readonly canvas: HTMLCanvasElement;
+  /** The DOM-overlay tooltip shown on a waypoint click (US-017); positioned over the canvas wrapper. */
+  readonly tooltip: HTMLElement;
 }
 
 export class DomControls {
   /** The last successfully generated walk, kept so the toggles can redraw it without regenerating. */
   private currentWalk: Walk | null = null;
+
+  /** The waypoint the pointer is currently over (US-017 hover), or null. Drives the cursor + highlight. */
+  private hoveredWaypoint: Waypoint | null = null;
 
   constructor(
     private readonly deps: DomControlsDeps,
@@ -92,11 +107,14 @@ export class DomControls {
       turnsToggle: required<HTMLInputElement>(doc, CONTROL_IDS.turnsToggle),
       printButton: required<HTMLButtonElement>(doc, CONTROL_IDS.printButton),
       loadingOverlay: required<HTMLElement>(doc, CONTROL_IDS.loadingOverlay),
+      canvas: required<HTMLCanvasElement>(doc, CONTROL_IDS.canvas),
+      tooltip: required<HTMLElement>(doc, CONTROL_IDS.tooltip),
     });
   }
 
   private wire(): void {
-    const { generateButton, clearButton, printButton, wildcardsToggle, turnsToggle } = this.elements;
+    const { generateButton, clearButton, printButton, wildcardsToggle, turnsToggle, canvas } =
+      this.elements;
     // Generate is async; the listener owns the rejection so a stray failure can't become an
     // unhandled promise rejection. The button stays disabled and the overlay shown for the whole
     // in-flight generation (both restored in `generate`'s finally).
@@ -108,6 +126,10 @@ export class DomControls {
     // Toggles redraw the current walk with the new options — they never regenerate.
     wildcardsToggle.addEventListener("change", () => this.rerender());
     turnsToggle.addEventListener("change", () => this.rerender());
+    // Pointer interaction on the map (US-017): click a waypoint for its tooltip, hover for feedback.
+    canvas.addEventListener("click", (event) => this.handlePointerClick(event));
+    canvas.addEventListener("mousemove", (event) => this.handlePointerMove(event));
+    canvas.addEventListener("mouseleave", () => this.clearHover());
   }
 
   /**
@@ -139,11 +161,15 @@ export class DomControls {
 
   /**
    * Remove all waypoints and lines from the canvas and forget the current walk (so the toggles
-   * become a no-op until the next Generate). Also used as the first step of {@link generate}.
+   * become a no-op until the next Generate). Also dismisses the waypoint tooltip and drops any hover
+   * highlight, since the walk they referred to is gone. Used as the first step of {@link generate}
+   * too, so a fresh Generate dismisses the tooltip as well (US-017 AC2).
    */
   clear(): void {
     this.deps.clearWalk.execute();
     this.currentWalk = null;
+    this.hideTooltip();
+    this.clearHover();
   }
 
   /** Open the browser print dialog. */
@@ -151,11 +177,79 @@ export class DomControls {
     window.print();
   }
 
-  /** Redraw the current walk with the live toggle options, or do nothing if there is no walk yet. */
+  /**
+   * Redraw the current walk with the live toggle options, or do nothing if there is no walk yet.
+   * A full draw clears the renderer's hover emphasis, so re-apply it for the still-hovered waypoint
+   * (the tooltip is a separate DOM overlay and survives the redraw untouched — US-017 AC2).
+   */
   private rerender(): void {
-    if (this.currentWalk !== null) {
-      this.deps.renderer.draw(this.currentWalk, this.displayOptions());
+    if (this.currentWalk === null) return;
+    this.deps.renderer.draw(this.currentWalk, this.displayOptions());
+    if (this.hoveredWaypoint !== null) {
+      this.deps.renderer.highlight(this.hoveredWaypoint);
     }
+  }
+
+  /**
+   * A click on the map: show the tooltip for the clicked waypoint, or dismiss it on a click over
+   * empty canvas (US-017 AC1/AC2). Hit-testing inverts the viewport → A4 → generation transforms.
+   */
+  private handlePointerClick(event: MouseEvent): void {
+    const waypoint = this.deps.renderer.hitTest(event.clientX, event.clientY);
+    if (waypoint === null) {
+      this.hideTooltip();
+      return;
+    }
+    this.showTooltip(waypoint, event.clientX, event.clientY);
+  }
+
+  /**
+   * Pointer movement over the map: when the waypoint under the cursor changes, switch the cursor to a
+   * pointer and emphasise that waypoint (drop shadow + thick segments) via the renderer; over empty
+   * canvas, restore the default cursor and clear the emphasis (US-017 AC4). Redraws only happen on a
+   * genuine change so a 90-waypoint walk is not re-rendered on every pixel of movement.
+   */
+  private handlePointerMove(event: MouseEvent): void {
+    const waypoint = this.deps.renderer.hitTest(event.clientX, event.clientY);
+    const current = this.hoveredWaypoint;
+    const unchanged =
+      waypoint === null
+        ? current === null
+        : current !== null && waypoint.sequenceNumber === current.sequenceNumber;
+    if (unchanged) return;
+    this.hoveredWaypoint = waypoint;
+    this.elements.canvas.style.cursor = waypoint !== null ? "pointer" : "default";
+    this.deps.renderer.highlight(waypoint);
+  }
+
+  /** Drop all hover state: restore the default cursor and clear the renderer emphasis (US-017 AC4). */
+  private clearHover(): void {
+    if (this.hoveredWaypoint === null) return;
+    this.hoveredWaypoint = null;
+    this.elements.canvas.style.cursor = "default";
+    this.deps.renderer.highlight(null);
+  }
+
+  /**
+   * Fill and position the DOM-overlay tooltip for a clicked waypoint, then show it (US-017 AC1). The
+   * cumulative distance is generation-space px (from the domain Walk), so it is stable across canvas
+   * redraws and viewport resizes. Positioned at the click point within the canvas wrapper.
+   */
+  private showTooltip(waypoint: Waypoint, clientX: number, clientY: number): void {
+    if (this.currentWalk === null) return;
+    const { tooltip, canvas } = this.elements;
+    const distance = Math.round(this.currentWalk.cumulativeDistanceTo(waypoint.sequenceNumber - 1));
+    tooltip.textContent = tooltipText(waypoint, distance);
+
+    const rect = canvas.getBoundingClientRect();
+    tooltip.style.left = `${clientX - rect.left + TOOLTIP_OFFSET}px`;
+    tooltip.style.top = `${clientY - rect.top + TOOLTIP_OFFSET}px`;
+    tooltip.style.display = "block";
+  }
+
+  /** Hide the waypoint tooltip (US-017 AC2: dismiss on Clear / Generate / empty-canvas click). */
+  private hideTooltip(): void {
+    this.elements.tooltip.style.display = "none";
   }
 
   /** The current display options read live from the two toggles. */
@@ -190,4 +284,36 @@ function required<T extends HTMLElement>(doc: Document, id: string): T {
     throw new Error(`DomControls: required element #${id} not found in the document`);
   }
   return el as T;
+}
+
+/**
+ * The tooltip body for a clicked waypoint (US-017): its number, outbound turn direction, and the
+ * cumulative generation-space distance from the start. Lines are newline-separated; index.html styles
+ * the tooltip with `white-space: pre-line` so each becomes its own line.
+ */
+function tooltipText(waypoint: Waypoint, distance: number): string {
+  return [
+    `Waypoint ${waypoint.sequenceNumber}`,
+    `Turn: ${turnDescription(waypoint)}`,
+    `${distance} px from start`,
+  ].join("\n");
+}
+
+/**
+ * The turn direction shown in the tooltip: `L` / `R` for an interior turn, `Wildcard` when the turn
+ * is skipped (the walker goes straight), and `none` for the terminal Start / End waypoints (which
+ * have no outbound turn by the Waypoint invariant).
+ */
+function turnDescription(waypoint: Waypoint): string {
+  if (waypoint.isFirst) return "none (start)";
+  if (waypoint.isLast) return "none (end)";
+  if (waypoint.wildcard) return "Wildcard";
+  switch (waypoint.outboundTurn) {
+    case Turn.Left:
+      return "L";
+    case Turn.Right:
+      return "R";
+    default:
+      return "none";
+  }
 }

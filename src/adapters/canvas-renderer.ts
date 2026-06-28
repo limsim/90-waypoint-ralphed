@@ -2,7 +2,8 @@ import { Walk } from "../domain/walk.js";
 import { Waypoint } from "../domain/waypoint.js";
 import { Turn } from "../domain/turn.js";
 import { WAYPOINT_RADIUS, turnLabelPoint } from "../domain/layout-rules.js";
-import { DisplayOptions, Renderer } from "../application/renderer-port.js";
+import { DisplayOptions } from "../application/renderer-port.js";
+import { InteractiveRenderer } from "./interactive-renderer.js";
 
 /**
  * Canvas 2D implementation of the `Renderer` driven port (docs/adr/0003).
@@ -24,6 +25,12 @@ import { DisplayOptions, Renderer } from "../application/renderer-port.js";
  * generation-space coordinates are never mutated. The complementary viewport fit (CSS-scaling the
  * canvas ELEMENT down when the window is narrower than 794px) is a stylesheet concern in index.html
  * (`canvas { max-width: 100%; height: auto }`), not a Canvas-2D drawing transform, so it lives there.
+ *
+ * US-017 makes the renderer pointer-interactive (it implements {@link InteractiveRenderer}, an
+ * adapter-layer extension of the port — picking/hover are view concerns no use case needs). It
+ * remembers the last walk + A4-fit transform so {@link hitTest} can invert BOTH transforms (the CSS
+ * element scale and the A4 fit) to map a viewport click to a waypoint, and {@link highlight} can
+ * re-render the same picture with one waypoint emphasised (drop shadow + 4px incident segments).
  */
 
 /** Generation-space size of one grid cell (px). */
@@ -43,6 +50,15 @@ const SEGMENT_WIDTH = 2;
 const GRID_WIDTH = 1;
 const WAYPOINT_BORDER_WIDTH = 2;
 const WILDCARD_RING_WIDTH = 3;
+
+/**
+ * Hover highlight (US-017). The hovered waypoint's connecting segments thicken to this width, and its
+ * circle gains a soft drop shadow. Generation-space px, so they scale with the A4 fit like everything else.
+ */
+const HIGHLIGHT_SEGMENT_WIDTH = 4;
+const HIGHLIGHT_SHADOW_COLOUR = "rgba(0, 0, 0, 0.45)";
+const HIGHLIGHT_SHADOW_BLUR = 8;
+const HIGHLIGHT_SHADOW_OFFSET = 2;
 
 /** Wildcard ring: an orange circle at radius 30px from the waypoint centre (US-014). */
 const WILDCARD_RING_RADIUS = 30;
@@ -65,8 +81,27 @@ const TURN_LABEL_FONT = "bold 16px Arial";
 /** Wildcard turn label — the walker goes straight, so the skipped turn shows as a W. */
 const WILDCARD_LABEL = "W";
 
-export class CanvasRenderer implements Renderer {
+export class CanvasRenderer implements InteractiveRenderer {
   private readonly ctx: CanvasRenderingContext2D;
+
+  /**
+   * The walk and display options from the last {@link draw}, kept so a hover {@link highlight} can
+   * re-render the same picture without the caller re-supplying them, and so {@link hitTest} has a
+   * walk to test pointer positions against. Null before the first draw and after {@link clear}.
+   */
+  private lastWalk: Walk | null = null;
+  private lastOptions: DisplayOptions | null = null;
+
+  /**
+   * The A4-fit transform applied by the last {@link draw} (generation-space → backing-store px):
+   * `screen = offset + scale·(gen − min)`. {@link hitTest} inverts it (together with the canvas
+   * element's CSS scale) to map a viewport click back to a waypoint. Null until the first draw.
+   */
+  private fit: { scale: number; offsetX: number; offsetY: number; minX: number; minY: number } | null =
+    null;
+
+  /** The hovered waypoint to emphasise (drop shadow + thick incident segments), or null (US-017). */
+  private highlighted: Waypoint | null = null;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d");
@@ -76,25 +111,96 @@ export class CanvasRenderer implements Renderer {
     this.ctx = ctx;
   }
 
-  /** Removes everything from the canvas (US-012 ClearWalk). */
+  /** Removes everything from the canvas and forgets the drawn walk + hover state (US-012 ClearWalk). */
   clear(): void {
     const { ctx, canvas } = this;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    this.lastWalk = null;
+    this.lastOptions = null;
+    this.fit = null;
+    this.highlighted = null;
   }
 
   /**
    * Draws the full walk: white background, grid, connected orthogonal path, numbered waypoints,
    * and — toggled independently by `options` — the wildcard rings (`showWildcards`) and the
-   * outbound turn labels (`showTurns`). Rings are drawn before labels so a label is never occluded
-   * by a ring; both sit on top of the path and circles.
+   * outbound turn labels (`showTurns`).
+   *
+   * A fresh draw clears any hover highlight (the picture changed); a subsequent pointer move
+   * re-establishes it through {@link highlight}. The walk, options and A4-fit transform are
+   * remembered so {@link highlight} can re-render and {@link hitTest} can invert the transform.
+   */
+  draw(walk: Walk, options: DisplayOptions): void {
+    this.lastWalk = walk;
+    this.lastOptions = options;
+    this.highlighted = null;
+    this.render();
+  }
+
+  /**
+   * Re-render the last drawn walk with `waypoint` emphasised as the hover target — a drop shadow on
+   * its circle and its connecting segments thickened to {@link HIGHLIGHT_SEGMENT_WIDTH}px — or pass
+   * null to clear the emphasis (US-017). A no-op when there is no current walk (before the first
+   * {@link draw} / after {@link clear}).
+   */
+  highlight(waypoint: Waypoint | null): void {
+    if (this.lastWalk === null) return;
+    this.highlighted = waypoint;
+    this.render();
+  }
+
+  /**
+   * Map a viewport (client) coordinate to the waypoint under it, or null when the point is over empty
+   * canvas (US-017 / docs/adr/0005). Inverts BOTH transforms in turn:
+   *  1. the canvas element's CSS scale (viewport → backing store), from {@link getBoundingClientRect}
+   *     — the element may be displayed smaller than its 794×1123 backing store on a narrow viewport;
+   *  2. the A4 fit (backing store → generation space), from the stored {@link fit}.
+   * Returns the nearest waypoint whose circle (radius {@link WAYPOINT_RADIUS}) contains the point.
+   * Null before the first draw / after clear, or when the element has no layout box (zero-sized).
+   */
+  hitTest(clientX: number, clientY: number): Waypoint | null {
+    const walk = this.lastWalk;
+    const fit = this.fit;
+    if (walk === null || fit === null) return null;
+
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+
+    // viewport → backing store: undo the CSS element scale (index.html's `canvas { max-width: 100% }`).
+    const backingX = ((clientX - rect.left) / rect.width) * this.canvas.width;
+    const backingY = ((clientY - rect.top) / rect.height) * this.canvas.height;
+
+    // backing store → generation space: undo the A4 fit (translate → scale → translate).
+    const genX = (backingX - fit.offsetX) / fit.scale + fit.minX;
+    const genY = (backingY - fit.offsetY) / fit.scale + fit.minY;
+
+    let nearest: Waypoint | null = null;
+    let nearestDistance = WAYPOINT_RADIUS;
+    for (const wp of walk.waypoints) {
+      const distance = Math.hypot(wp.position.x - genX, wp.position.y - genY);
+      if (distance <= nearestDistance) {
+        nearestDistance = distance;
+        nearest = wp;
+      }
+    }
+    return nearest;
+  }
+
+  /**
+   * The actual draw, shared by {@link draw} (fresh) and {@link highlight} (hover re-render) so the
+   * transform is computed in exactly one place. Rings are drawn before labels so a label is never
+   * occluded by a ring; the highlighted waypoint's thick segments go under the circles.
    *
    * The padded content box is uniformly scaled to FIT the A4-capped backing store and centred
    * within the canvas (US-015): a walk larger than A4 is shrunk to fit; a walk already within A4 is
    * never enlarged (the scale is clamped to ≤ 1). All drawing stays in generation-space px — the
-   * scale + centre is applied purely through the canvas transform.
+   * scale + centre is applied purely through the canvas transform, which is recorded in {@link fit}.
    */
-  draw(walk: Walk, options: DisplayOptions): void {
+  private render(): void {
+    const walk = this.lastWalk;
+    const options = this.lastOptions;
+    if (walk === null || options === null) return;
     const { ctx, canvas } = this;
 
     // Background, in screen space (independent of the content transform).
@@ -122,6 +228,9 @@ export class CanvasRenderer implements Renderer {
     const offsetX = (canvas.width - contentW * scale) / 2;
     const offsetY = (canvas.height - contentH * scale) / 2;
 
+    // Remember the transform so hitTest can invert it (generation ↔ backing store).
+    this.fit = { scale, offsetX, offsetY, minX, minY };
+
     ctx.save();
     ctx.translate(offsetX, offsetY);
     ctx.scale(scale, scale);
@@ -129,6 +238,7 @@ export class CanvasRenderer implements Renderer {
 
     this.drawGrid(minX, minY, maxX, maxY);
     this.drawPath(walk);
+    this.drawHighlightedSegments(walk);
     this.drawWaypoints(walk);
     if (options.showWildcards) this.drawWildcardRings(walk);
     if (options.showTurns) this.drawTurnLabels(walk);
@@ -182,11 +292,47 @@ export class CanvasRenderer implements Renderer {
   }
 
   /**
+   * Hover emphasis for the path (US-017): the segments incident to the highlighted waypoint redrawn
+   * at {@link HIGHLIGHT_SEGMENT_WIDTH}px on top of the 2px base path. Drawn before the waypoint
+   * circles so the circles cover the thick segments' endpoints, exactly as for the base path. A
+   * no-op when nothing is highlighted. An interior waypoint thickens both its incoming and outgoing
+   * segments; a terminal thickens its single connecting segment.
+   */
+  private drawHighlightedSegments(walk: Walk): void {
+    const highlighted = this.highlighted;
+    if (highlighted === null) return;
+    const waypoints = walk.waypoints;
+    const i = highlighted.sequenceNumber - 1; // sequence numbers are 1-based
+    if (i < 0 || i >= waypoints.length) return;
+
+    const { ctx } = this;
+    ctx.save();
+    ctx.strokeStyle = SEGMENT_COLOUR;
+    ctx.lineWidth = HIGHLIGHT_SEGMENT_WIDTH;
+    ctx.lineJoin = "miter";
+    ctx.lineCap = "butt";
+    ctx.beginPath();
+    if (i > 0) {
+      ctx.moveTo(waypoints[i - 1].position.x, waypoints[i - 1].position.y);
+      ctx.lineTo(waypoints[i].position.x, waypoints[i].position.y);
+    }
+    if (i < waypoints.length - 1) {
+      ctx.moveTo(waypoints[i].position.x, waypoints[i].position.y);
+      ctx.lineTo(waypoints[i + 1].position.x, waypoints[i + 1].position.y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /**
    * Each waypoint as a radius-25 circle with its number centred in bold 20px Arial.
    * First + last waypoints: black fill / white border / white number; all others the inverse.
+   * The hovered waypoint (US-017) is drawn with a soft drop shadow on its circle; the shadow is
+   * scoped to that circle (its own save/restore) so it never bleeds onto other circles or the number.
    */
   private drawWaypoints(walk: Walk): void {
     const { ctx } = this;
+    const highlighted = this.highlighted;
     ctx.save();
     ctx.font = WAYPOINT_FONT;
     ctx.textAlign = "center";
@@ -195,13 +341,22 @@ export class CanvasRenderer implements Renderer {
     for (const wp of walk.waypoints) {
       const terminal = wp.isTerminal;
       const { x, y } = wp.position;
+      const isHighlighted = highlighted !== null && wp.sequenceNumber === highlighted.sequenceNumber;
 
+      ctx.save();
+      if (isHighlighted) {
+        ctx.shadowColor = HIGHLIGHT_SHADOW_COLOUR;
+        ctx.shadowBlur = HIGHLIGHT_SHADOW_BLUR;
+        ctx.shadowOffsetX = HIGHLIGHT_SHADOW_OFFSET;
+        ctx.shadowOffsetY = HIGHLIGHT_SHADOW_OFFSET;
+      }
       ctx.beginPath();
       ctx.arc(x, y, WAYPOINT_RADIUS, 0, Math.PI * 2);
       ctx.fillStyle = terminal ? TERMINAL_FILL : WAYPOINT_FILL;
       ctx.fill();
       ctx.strokeStyle = terminal ? TERMINAL_BORDER : WAYPOINT_BORDER;
       ctx.stroke();
+      ctx.restore(); // drop the shadow before the number so it stays crisp
 
       ctx.fillStyle = terminal ? TERMINAL_TEXT : WAYPOINT_TEXT;
       ctx.fillText(String(wp.sequenceNumber), x, y);

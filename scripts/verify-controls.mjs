@@ -32,22 +32,37 @@ function fakeEl(props = {}) {
     disabled: false,
     checked: false,
     value: "",
+    textContent: "",
     ...props,
     addEventListener(type, fn) {
       (listeners[type] ||= []).push(fn);
     },
-    dispatch(type) {
-      for (const fn of listeners[type] || []) fn();
+    // Mouse-event listeners (US-017) read event.clientX/clientY — dispatch forwards an optional event.
+    dispatch(type, event) {
+      for (const fn of listeners[type] || []) fn(event);
     },
   };
 }
 
-/** A recording fake Renderer (the driven port). Tracks draw/clear calls + the on-screen walk. */
+/** A fake canvas: a fakeEl that also reports a layout box (for hit-testing / tooltip positioning). */
+function fakeCanvas(rect = { left: 0, top: 0, width: 794, height: 1123 }) {
+  return fakeEl({ getBoundingClientRect: () => rect });
+}
+
+/**
+ * A recording fake InteractiveRenderer (the driven port). Tracks draw/clear calls + the on-screen
+ * walk, plus US-017's hit-testing and hover highlight: `hitTarget` is what `hitTest` returns (set by
+ * the test), `hitArgs` records the (clientX, clientY) it was called with, and `highlights` records
+ * every `highlight()` argument. The real coordinate-inversion `hitTest` is proven in verify-renderer.
+ */
 function makeFakeRenderer() {
   const calls = [];
   return {
     calls,
     current: null,
+    hitTarget: null,
+    hitArgs: [],
+    highlights: [],
     draw(walk, options) {
       calls.push({ type: "draw", walk, options });
       this.current = walk;
@@ -55,6 +70,14 @@ function makeFakeRenderer() {
     clear() {
       calls.push({ type: "clear" });
       this.current = null;
+    },
+    hitTest(clientX, clientY) {
+      this.hitArgs.push([clientX, clientY]);
+      return this.hitTarget;
+    },
+    highlight(waypoint) {
+      this.highlights.push(waypoint);
+      calls.push({ type: "highlight", waypoint });
     },
     drawsOf() {
       return calls.filter((c) => c.type === "draw");
@@ -75,6 +98,8 @@ function makeElements() {
     turnsToggle: fakeEl({ checked: true }),
     printButton: fakeEl(),
     loadingOverlay: fakeEl(),
+    canvas: fakeCanvas(),
+    tooltip: fakeEl(),
   };
 }
 
@@ -348,6 +373,8 @@ function ok(label) {
     [CONTROL_IDS.turnsToggle]: els.turnsToggle,
     [CONTROL_IDS.printButton]: els.printButton,
     [CONTROL_IDS.loadingOverlay]: els.loadingOverlay,
+    [CONTROL_IDS.canvas]: els.canvas,
+    [CONTROL_IDS.tooltip]: els.tooltip,
   };
   const fakeDoc = { getElementById: (id) => byId[id] ?? null };
 
@@ -463,7 +490,152 @@ function ok(label) {
   assert.ok(/class=["']spinner["']/.test(html), "overlay has a .spinner element");
   assert.ok(/Generating\.\.\./.test(html), 'overlay shows the "Generating..." text');
   assert.ok(/@keyframes\s+spin\b/.test(html), "spinner has its @keyframes spin animation");
-  ok("index.html markup matches the adapter contract (ids, input range/default, toggles, overlay)");
+
+  // 5. The waypoint tooltip (US-017) is a DOM OVERLAY — not painted on the canvas (AC1): an element
+  //    with the right id, absolutely positioned, non-interactive (so it never swallows the next
+  //    click/hover on the canvas), and pre-line so the adapter's 3 newline-separated facts render as
+  //    separate lines. Asserted from the real index.html, the one seam the fake elements can't cover.
+  assert.ok(tagWithId(CONTROL_IDS.tooltip), "index.html has the #waypoint-tooltip overlay element");
+  assert.ok(/#waypoint-tooltip\s*\{[^}]*position:\s*absolute/i.test(html), "tooltip is absolutely positioned (a DOM overlay)");
+  assert.ok(/#waypoint-tooltip\s*\{[^}]*pointer-events:\s*none/i.test(html), "tooltip is non-interactive (pointer-events: none)");
+  assert.ok(/#waypoint-tooltip\s*\{[^}]*white-space:\s*pre-line/i.test(html), "tooltip renders multi-line text (white-space: pre-line)");
+  ok("index.html markup matches the adapter contract (ids, input range/default, toggles, overlay, tooltip)");
+}
+
+// ── US-017: clicking a waypoint shows the DOM-overlay tooltip with number / turn / distance ──
+// The expected turn description mirrors the adapter's turnDescription (kept in sync deliberately).
+function expectedTurnDesc(wp) {
+  if (wp.isFirst) return "none (start)";
+  if (wp.isLast) return "none (end)";
+  if (wp.wildcard) return "Wildcard";
+  if (wp.outboundTurn === "L") return "L"; // Turn.Left
+  if (wp.outboundTurn === "R") return "R"; // Turn.Right
+  return "none";
+}
+
+/** Generate a real walk through DomControls and hand back the wiring + the drawn Walk for US-017 tests. */
+async function generated(seed = SEED) {
+  const { deps, renderer } = makeDeps(undefined, seed);
+  const els = makeElements();
+  const controls = new DomControls(deps, els);
+  await controls.generate();
+  return { controls, els, renderer, walk: renderer.drawsOf()[0].walk };
+}
+
+{
+  const { els, renderer, walk } = await generated();
+  const interior = walk.waypoints.find((w) => w.isInterior && !w.wildcard);
+  assert.ok(interior, "the generated walk has an interior turn waypoint to inspect");
+
+  renderer.hitTarget = interior;
+  els.canvas.dispatch("click", { clientX: 123, clientY: 456 });
+
+  assert.deepEqual(renderer.hitArgs.at(-1), [123, 456], "click forwards the event's client coords to hitTest");
+  assert.equal(els.tooltip.style.display, "block", "tooltip is shown on a waypoint click");
+  const text = els.tooltip.textContent;
+  assert.ok(text.includes(`Waypoint ${interior.sequenceNumber}`), "tooltip shows the waypoint number");
+  assert.ok(text.includes(`Turn: ${expectedTurnDesc(interior)}`), "tooltip shows the turn direction (L/R)");
+  const dist = Math.round(walk.cumulativeDistanceTo(interior.sequenceNumber - 1));
+  assert.ok(text.includes(`${dist} px from start`), "tooltip shows the cumulative generation-space distance");
+  // Positioned at the click point (offset clear of the cursor) within the canvas wrapper.
+  assert.equal(els.tooltip.style.left, "135px", "tooltip x = clientX - rect.left + offset");
+  assert.equal(els.tooltip.style.top, "468px", "tooltip y = clientY - rect.top + offset");
+  ok("Click a waypoint: tooltip shows number, turn direction and cumulative distance, positioned at the click");
+}
+
+// ── US-017: tooltip content for a terminal (Start) waypoint — no turn, distance 0 ──
+{
+  const { els, renderer, walk } = await generated();
+  const first = walk.waypoints[0];
+  renderer.hitTarget = first;
+  els.canvas.dispatch("click", { clientX: 10, clientY: 10 });
+  const text = els.tooltip.textContent;
+  assert.ok(text.includes("Waypoint 1"), "start tooltip shows waypoint 1");
+  assert.ok(text.includes("Turn: none (start)"), "start tooltip marks it as the start with no turn");
+  assert.ok(text.includes("0 px from start"), "start waypoint cumulative distance is 0");
+  ok("Click the Start waypoint: tooltip shows it as the start with distance 0");
+}
+
+// ── US-017: a wildcard waypoint's tooltip reports the Wildcard turn ──
+{
+  const { els, renderer, walk } = await generated();
+  const wildcard = walk.waypoints.find((w) => w.wildcard);
+  assert.ok(wildcard, "the generated walk has a wildcard to inspect");
+  renderer.hitTarget = wildcard;
+  els.canvas.dispatch("click", { clientX: 5, clientY: 5 });
+  assert.ok(els.tooltip.textContent.includes("Turn: Wildcard"), "wildcard tooltip reports the Wildcard turn");
+  ok("Click a wildcard waypoint: tooltip reports the Wildcard turn");
+}
+
+// ── US-017: tooltip dismisses on a click over empty canvas, on Clear, and on Generate; survives redraws ──
+{
+  const { controls, els, renderer, walk } = await generated();
+  const wp = walk.waypoints.find((w) => w.isInterior);
+
+  // Show it, then click empty canvas → dismissed.
+  renderer.hitTarget = wp;
+  els.canvas.dispatch("click", { clientX: 1, clientY: 1 });
+  assert.equal(els.tooltip.style.display, "block", "tooltip up before the empty click");
+  renderer.hitTarget = null;
+  els.canvas.dispatch("click", { clientX: 2, clientY: 2 });
+  assert.equal(els.tooltip.style.display, "none", "tooltip dismissed on a click over empty canvas");
+
+  // Show again, then a toggle redraw must NOT dismiss it (it survives redraws).
+  renderer.hitTarget = wp;
+  els.canvas.dispatch("click", { clientX: 1, clientY: 1 });
+  els.turnsToggle.checked = false;
+  els.turnsToggle.dispatch("change");
+  assert.equal(els.tooltip.style.display, "block", "tooltip survives a toggle redraw");
+
+  // Clear dismisses it.
+  els.clearButton.dispatch("click");
+  assert.equal(els.tooltip.style.display, "none", "tooltip dismissed on Clear");
+
+  // Show again, then Generate dismisses it (generate clears first).
+  await controls.generate();
+  renderer.hitTarget = renderer.drawsOf().at(-1).walk.waypoints.find((w) => w.isInterior);
+  els.canvas.dispatch("click", { clientX: 1, clientY: 1 });
+  assert.equal(els.tooltip.style.display, "block", "tooltip up before Generate");
+  await controls.generate();
+  assert.equal(els.tooltip.style.display, "none", "tooltip dismissed on Generate");
+  ok("Tooltip dismisses on empty-canvas click, Clear and Generate; survives a toggle redraw");
+}
+
+// ── US-017: hover → pointer cursor + waypoint highlight; off → default cursor + cleared highlight ──
+{
+  const { els, renderer, walk } = await generated();
+  const wp = walk.waypoints.find((w) => w.isInterior);
+
+  renderer.hitTarget = wp;
+  els.canvas.dispatch("mousemove", { clientX: 1, clientY: 1 });
+  assert.equal(els.canvas.style.cursor, "pointer", "cursor becomes a pointer over a waypoint");
+  assert.equal(renderer.highlights.at(-1), wp, "hovering a waypoint highlights it (drop shadow + thick segments)");
+
+  // Redundant movement WITHIN the same waypoint must not re-highlight (no per-pixel redraw).
+  const before = renderer.highlights.length;
+  els.canvas.dispatch("mousemove", { clientX: 2, clientY: 2 });
+  assert.equal(renderer.highlights.length, before, "no re-highlight while still over the same waypoint");
+
+  // Move to empty canvas → cursor restored, highlight cleared.
+  renderer.hitTarget = null;
+  els.canvas.dispatch("mousemove", { clientX: 3, clientY: 3 });
+  assert.equal(els.canvas.style.cursor, "default", "cursor restored over empty canvas");
+  assert.equal(renderer.highlights.at(-1), null, "moving off a waypoint clears the highlight");
+  ok("Hover: pointer cursor + waypoint highlight; restored over empty canvas; no redundant redraws");
+}
+
+// ── US-017: moving off the canvas (mouseleave) removes all hover highlighting ──
+{
+  const { els, renderer, walk } = await generated();
+  const wp = walk.waypoints.find((w) => w.isInterior);
+  renderer.hitTarget = wp;
+  els.canvas.dispatch("mousemove", { clientX: 1, clientY: 1 });
+  assert.equal(renderer.highlights.at(-1), wp, "hovering set the highlight before leaving");
+
+  els.canvas.dispatch("mouseleave");
+  assert.equal(els.canvas.style.cursor, "default", "cursor restored on mouseleave");
+  assert.equal(renderer.highlights.at(-1), null, "mouseleave clears the hover highlight");
+  ok("Moving off the canvas (mouseleave) removes all hover highlighting");
 }
 
 console.log(`\nAll ${passed} DOM-controls checks passed.`);
