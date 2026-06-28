@@ -9,7 +9,14 @@ Marcus John Henry Brown's 90 Waypoint Walk. DDD + hexagonal architecture; see `d
   `walk-generator` domain service. **No DOM, no Canvas, no `dom` lib, no node types.**
 - `src/application/` — use cases (`generate-walk`, `clear-walk`). Depends only on `domain`.
 - `src/adapters/` — DOM + Canvas live here ONLY (`dom-controls.ts`, `canvas-renderer.ts`).
-- `src/main.ts` — composition root (wires everything; injects ports).
+- `src/main.ts` — composition root (US-021): the ONLY place that wires the core to the adapters and
+  picks the production ports. It injects an entropy-seeded `SeededRandom` **factory** (`createRandom`,
+  fresh per generation — US-022 layers `?seed=` on top), the `CanvasRenderer`, and a **macrotask** Yield
+  (`setTimeout(…,0)` — NOT a microtask, or paint is starved and the overlay never shows). It
+  auto-generates a walk on load so the canvas is never blank. The wiring is exported as
+  `bootstrap(doc=document)` + `productionYield`/`createRandom`, and the auto-run is guarded by
+  `typeof document !== "undefined"` so importing it in Node is side-effect-free (the gate
+  `npm run verify:main` drives the real composition headlessly with a fake document).
 - The two real boundaries (randomness, rendering) plus a yield boundary are inverted as **ports**
   (`RandomSource`, `Renderer`, `Yield`). The seedable `RandomSource` makes generation deterministic.
 
