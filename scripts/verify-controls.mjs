@@ -678,6 +678,34 @@ function ok(label) {
   ok("US-022 (AC1): the ?seed= URL seeds only the first generation, then a fresh seed is used");
 }
 
+// ── US-022 (AC1): ?seed=0 is HONOURED as a valid seed, not treated as "no seed" — the falsy-edge ──
+// 0 is a perfectly valid 32-bit seed but it is also FALSY. takeSeedOverride() must consume it with
+// `?? undefined` (nullish), NOT `|| undefined` (truthiness): the latter would drop the 0 override and
+// fall back to a fresh entropy seed, silently breaking reproducibility for a `?seed=0` shared link.
+// Every other adapter check uses a truthy seed (4242/13579/11111), so this boundary would otherwise
+// rot. Non-vacuous: the factory's default fresh seed is 4242, so a regression that dropped the 0
+// override would reflect 4242 instead of 0 (and draw a different walk). Proven to bite by swapping
+// `?? undefined` → `|| undefined` in dom-controls.ts (then reverted).
+{
+  const { deps, renderer, walkUrl } = makeDeps(undefined, 4242);
+  walkUrl.params = { seed: 0, count: 40 }; // simulate ?seed=0&count=40 on load
+  const els = makeElements();
+  const controls = new DomControls(deps, els);
+
+  await controls.generate();
+  assert.equal(walkUrl.reflected[0].seed, 0, "the first generation HONOURS ?seed=0 (a valid, falsy seed — not entropy)");
+
+  // End-to-end: the seed-0 walk must equal one generated directly from `new SeededRandom(0)` at the
+  // same count — proving `?seed=0` actually reproduces, not merely that the number 0 was passed through.
+  const refGen = new GenerateWalk({ yieldToEventLoop: () => Promise.resolve() });
+  const ref = await refGen.execute(40, new SeededRandom(0));
+  assert.ok(ref.ok, "the seed-0 reference generation succeeds (a walk to compare against)");
+  const fp = (walk) =>
+    JSON.stringify(walk.waypoints.map((w) => [w.sequenceNumber, w.position.x, w.position.y, w.outboundTurn, w.wildcard]));
+  assert.equal(fp(renderer.drawsOf()[0].walk), fp(ref.walk), "?seed=0 reproduces the canonical seed-0 walk end-to-end");
+  ok("US-022 (AC1): ?seed=0 is honoured as a valid seed (the `?? undefined` nullish edge, not `|| undefined`)");
+}
+
 // ── US-022 (AC1): a ?count= URL pre-fills the waypoint input and is used for the first generation ──
 {
   const { deps, renderer, walkUrl } = makeDeps(undefined, 4242);

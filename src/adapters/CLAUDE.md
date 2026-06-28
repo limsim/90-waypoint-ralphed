@@ -115,8 +115,10 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   construction it reads `?seed=`/`?count=` once (`applyUrlParams`): the count pre-fills the waypoint
   input, and the seed is stashed in `pendingUrlSeed`. `generate()` consumes that override via
   `takeSeedOverride()` (ONE-SHOT — the URL seed seeds only the FIRST generation, so a shared link
-  reproduces its walk, after which every Generate mints a fresh entropy seed), passes it to
-  `createRandom`, and on SUCCESS calls `walkUrl.reflect({ seed, count })` to update the address bar
+  reproduces its walk, after which every Generate mints a fresh entropy seed). NOTE `takeSeedOverride`
+  returns `seed ?? undefined` (NULLISH, not `seed || undefined`): 0 is a valid 32-bit seed but falsy, so
+  `||` would drop a `?seed=0` link to entropy — `verify:controls` has a dedicated `?seed=0` check (proven
+  to bite). It passes the override to `createRandom`, and on SUCCESS calls `walkUrl.reflect({ seed, count })` to update the address bar
   (the seed is the canonical value; the count is the ACTUAL clamped count used, not the raw input). A
   failed (ok:false) generation reflects nothing. The domain stays seed/URL-agnostic; all URL access is
   in `WalkUrl`. `verify:controls` covers it (reflect-on-success with the actual count; no-reflect on

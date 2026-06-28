@@ -503,6 +503,21 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   the consumer (`SeededRandom`'s `seed >>> 0`), NOT the parser — the parser only answers "is this an
   integer at all?". walk-url.ts's `parseIntParam` does this; verify:main guards it (partial/decimal/hex/
   exponent → null; clean signed/whitespace-padded integer honoured), proven to bite vs lenient parseInt.
+- A FALSY-but-VALID sentinel needs its OWN test or it rots silently. `?seed=0` is a valid 32-bit seed
+  but 0 is falsy: `takeSeedOverride()` must consume the override with `?? undefined` (nullish), NOT
+  `|| undefined` (truthiness) — the latter drops seed 0 and falls back to entropy, breaking a `?seed=0`
+  shared link. Every other US-022 adapter check used a TRUTHY seed (4242/13579/11111), so the `||`
+  regression passed them all; verify:controls now has a dedicated `?seed=0` check (assert reflected
+  seed===0 + the drawn walk equals a `new SeededRandom(0)` reference), proven to bite. Same lesson as
+  the aspect-`min(...)` per-binding-term fixtures: a branch only one literal exercises rots.
+- A round-trip test for a NUMBER must use a value in the REAL range, not a toy. `createRandom` seeds
+  from ENTROPY (full uint32, up to 2^32-1), so a shared `?seed=` link almost always carries a LARGE
+  seed — but the verify:main reflect→read round-trip long used only seed 4242 (and the createRandom
+  canonicality check used 0x12345678 = 305419896, both < 2^31). A `>>> 0`→`>> 0` (signed-shift)
+  regression in `SeededRandom.seed` leaves seeds < 2^31 positive/unchanged (every existing check
+  passes) but flips high-bit seeds negative. verify:main now round-trips {0, 1, 2^31, 0xDEADBEEF,
+  2^32-1} through productionWalkUrl AND asserts `createRandom(seed).seed === seed` (every uint32 is a
+  `>>> 0` fixed point) — proven to bite on the signed-shift regression that the < 2^31 check is blind to.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -2405,4 +2420,42 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     `npm test`. To headlessly exercise its parse, stub `globalThis.window = { location: { search, ... },
     history }` and reset to `undefined` in a `finally`; `%20` in a search string decodes to a space via
     URLSearchParams, so `count=%2040%20` is the way to test the parser's `.trim()`.
+---
+
+## 2026-06-28 - US-022 (Shareable reproducible walks via ?seed= URL) — REFINEMENT
+- US-022 already passed; re-verified all acceptance criteria green end to end and closed two genuine
+  coverage gaps around edge-case seed values (every prior US-022 test used a truthy, sub-2^31 seed):
+  - **verify:controls (33→34):** added a `?seed=0` check. 0 is a valid 32-bit seed but FALSY, so
+    `takeSeedOverride()`'s `seed ?? undefined` (nullish) is load-bearing — a `|| undefined` regression
+    would drop seed 0 and fall back to entropy, silently breaking a `?seed=0` shared link. The check
+    asserts the first generation reflects seed===0 AND the drawn walk equals a `new SeededRandom(0)`
+    reference (end-to-end reproducibility, not just that 0 was passed through). PROVEN TO BITE
+    (`?? undefined`→`|| undefined` in dom-controls.ts fails "the first generation HONOURS ?seed=0";
+    reverted via a precise perl replace, NOT git checkout — uncommitted story files).
+  - **verify:main (13→14):** added a FULL-RANGE uint32 round-trip. `createRandom` seeds from entropy
+    (up to 2^32-1) so a real shared link carries a LARGE seed, but the existing reflect→read round-trip
+    used only seed 4242 and the createRandom canonicality check used 0x12345678 (both < 2^31). The new
+    check round-trips {0, 1, 2^31, 0xDEADBEEF, 2^32-1} through productionWalkUrl losslessly AND asserts
+    `createRandom(seed).seed === seed` (uint32 `>>> 0` fixed point). PROVEN TO BITE: regressing
+    `SeededRandom.seed` from `>>> 0` to `>> 0` (signed shift) leaves the existing < 2^31 check passing
+    (✓) but fails "seed 2147483648 is canonical" — the gap exactly. Reverted; `npm run clean` after.
+  - **tests/seed-reproducibility.test.ts:** corrected a now-stale comment claiming "parseInt mirrors
+    walk-url.ts" — walk-url.ts uses a STRICTER base-10 gate than bare parseInt (identical only for the
+    clean all-digit value the test uses). No behavioural change.
+- Files changed: scripts/verify-controls.mjs (+`?seed=0` check), scripts/verify-main.mjs (+full-range
+  uint32 round-trip check), tests/seed-reproducibility.test.ts (comment), scripts/ralph/progress.txt
+  (+2 Codebase Patterns + this entry). No src/ behavioural change — both regressions used to prove the
+  new gates bite were reverted.
+- Quality gate (all green): npm run typecheck; npm run clean + npm test → 252 pass / 0 fail (unchanged —
+  the new checks are in the adapter harnesses, not node:test); npm run verify:renderer; verify:controls
+  34/34; verify:main 14/14.
+- **Learnings for future iterations:**
+  - A FALSY-but-valid sentinel (seed 0) needs a dedicated test — truthy-only fixtures let a `??`→`||`
+    regression rot silently. Verify nullish-coalescing edges explicitly.
+  - Round-trip a number over its REAL range, not a toy value: entropy seeds span the full uint32, so a
+    high-bit (≥2^31) seed catches signed-vs-unsigned-shift regressions a small seed is blind to.
+  - CAVEAT (carried from US-013..021): no browser/Playwright MCP here, so the LIVE screenshot sign-off
+    (two loads of the same `?seed=` URL look identical; the URL updating after a fresh Generate) remains
+    the only outstanding item (AC8) — the headless harnesses + AC5 determinism node:test stand in for
+    the functional ACs.
 ---

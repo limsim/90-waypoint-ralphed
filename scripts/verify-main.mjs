@@ -337,6 +337,37 @@ function ok(label) {
   ok("productionWalkUrl: strict parse — partial-numeric params read as null, clean integers honoured (AC1)");
 }
 
+// ── US-022 AC3: a FULL-RANGE uint32 seed (the magnitude entropy actually produces) round-trips exactly ──
+// The round-trip check above uses a small toy seed (4242), but `createRandom()` seeds from entropy, so a
+// SHARED link almost always carries a LARGE uint32 seed (up to 4294967295). `reflect()` stringifies the
+// seed and `read()` parses it back — that must be lossless across the WHOLE 32-bit range, or a reflected
+// entropy walk would fail to reproduce when the link is reopened. This also exercises 0 (the valid-but-
+// falsy boundary seed) and 2^31 / 2^32-1 (high-bit set). The recovered value must additionally stay
+// CANONICAL: feeding it to `createRandom` reports back the same seed (every uint32 is a `>>> 0` fixed
+// point), so the reflected URL is a faithful round-trip of the seed the walk was built from.
+{
+  const reflectRead = (seed, count) => {
+    let written = null;
+    globalThis.window = {
+      location: { search: "", pathname: "/", hash: "" },
+      history: { replaceState: (_s, _t, url) => { written = url; } },
+    };
+    try {
+      productionWalkUrl.reflect({ seed, count });
+      assert.ok(written !== null, `reflect({seed:${seed}}) wrote the URL`);
+      globalThis.window.location.search = new URL(`http://x${written}`).search;
+      return productionWalkUrl.read();
+    } finally {
+      globalThis.window = undefined;
+    }
+  };
+  for (const seed of [0, 1, 2147483648, 3735928559, 4294967295]) {
+    assert.deepEqual(reflectRead(seed, 90), { seed, count: 90 }, `seed ${seed} round-trips through reflect→read losslessly`);
+    assert.equal(createRandom(seed).seed, seed, `seed ${seed} is canonical (createRandom round-trips it — a >>> 0 fixed point)`);
+  }
+  ok("productionWalkUrl: full-range uint32 seeds (incl. 0 and 2^32-1) round-trip losslessly and stay canonical (US-022 AC3)");
+}
+
 // ── AC2 (the headline): bootstrap wires the real adapters + use cases and auto-generates on load ──
 // Drive the REAL composition (CanvasRenderer ← ClearWalk/GenerateWalk ← walkGenerator, with the REAL
 // productionYield macrotask) through a fake document, await the auto-generate promise (within a timeout

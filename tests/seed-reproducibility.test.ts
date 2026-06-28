@@ -87,7 +87,8 @@ test("different seeds (same count) produce different walks — the check is not 
 
 test("a seed parsed from a ?seed= URL reproduces the shared walk on reload (US-022 AC3)", () => {
   // Mirror exactly what the adapter does: parse the seed out of a query string, regenerate. The two
-  // "loads" of the same link must produce the identical walk. (parseInt mirrors walk-url.ts.)
+  // "loads" of the same link must produce the identical walk. (walk-url.ts uses a STRICTER base-10
+  // gate than bare parseInt, but for this clean all-digit value the parsed result is identical.)
   const sharedLink = "?seed=305419896&count=40";
   const seed = Number.parseInt(new URLSearchParams(sharedLink).get("seed")!, 10);
   const count = Number.parseInt(new URLSearchParams(sharedLink).get("count")!, 10);
