@@ -313,6 +313,30 @@ function ok(label) {
   ok("productionWalkUrl: invalid/missing params and the Node no-window path both read as 'no params'");
 }
 
+// ── US-022 AC1: PARTIAL-numeric params (trailing garbage / decimals) read as null, not a truncated seed ──
+// `Number.parseInt` alone is lenient — "5abc" → 5, "3.7" → 3 — so a hand-edited / malformed shared URL
+// would quietly seed with a partial value. The strict parse in walk-url.ts rejects anything that is not a
+// clean optionally-signed integer, so an invalid seed behaves as "no seed" (a fresh entropy walk), exactly
+// as the contract and AC1 ("with no seed param, behaviour is unchanged") require. A CLEAN integer (incl. a
+// negative or whitespace-padded one) is still honoured — the canonicalisation to uint32 is SeededRandom's job.
+{
+  const reads = (search) => {
+    globalThis.window = { location: { search, pathname: "/", hash: "" }, history: { replaceState() {} } };
+    try {
+      return productionWalkUrl.read();
+    } finally {
+      globalThis.window = undefined;
+    }
+  };
+  // Trailing garbage and decimals are NOT honoured (must not silently become 5 / 3 / 40).
+  assert.deepEqual(reads("?seed=5abc&count=40px"), { seed: null, count: null }, "trailing-garbage params read as null (not a truncated seed)");
+  assert.deepEqual(reads("?seed=3.7&count=2.0"), { seed: null, count: null }, "decimal params read as null (parseInt would truncate them)");
+  assert.deepEqual(reads("?seed=0x10&count=1e3"), { seed: null, count: null }, "hex / exponent notation read as null (base-10 integers only)");
+  // Clean integers — including a negative seed and surrounding whitespace — ARE honoured.
+  assert.deepEqual(reads("?seed=-5&count=%2040%20"), { seed: -5, count: 40 }, "a clean (signed / trimmed) integer is still honoured");
+  ok("productionWalkUrl: strict parse — partial-numeric params read as null, clean integers honoured (AC1)");
+}
+
 // ── AC2 (the headline): bootstrap wires the real adapters + use cases and auto-generates on load ──
 // Drive the REAL composition (CanvasRenderer ← ClearWalk/GenerateWalk ← walkGenerator, with the REAL
 // productionYield macrotask) through a fake document, await the auto-generate promise (within a timeout

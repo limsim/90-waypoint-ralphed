@@ -495,6 +495,14 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   URL seed would diverge. When changing `createRandom`'s shape, every `deps` literal in
   verify-controls.mjs needs the new factory + a `walkUrl` (a `perl -0pi` replace of the identical
   `createRandom: () => new SeededRandom(SEED),` line handles the uniform ones in one pass).
+- Parsing a URL/query integer for a SHAREABLE link: bare `Number.parseInt(raw, 10)` is too lenient — it
+  accepts trailing garbage (`"5abc"→5`) and silently truncates/mis-reads non-decimals (`"3.7"→3`,
+  `"0x10"→0`, `"1e3"→1`). For a `?seed=`/`?count=` value the contract is "honour it ONLY if it's a clean
+  base-10 integer, else behave as if absent" (US-022 AC1: no/invalid seed ⇒ entropy default). So gate on
+  `/^-?\d+$/` (after `.trim()`) BEFORE `parseInt`. Keep CANONICALISATION (uint32 wrap, float trunc) in
+  the consumer (`SeededRandom`'s `seed >>> 0`), NOT the parser — the parser only answers "is this an
+  integer at all?". walk-url.ts's `parseIntParam` does this; verify:main guards it (partial/decimal/hex/
+  exponent → null; clean signed/whitespace-padded integer honoured), proven to bite vs lenient parseInt.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -2363,4 +2371,38 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - Changing `createRandom`'s shape ripples to BOTH verify harnesses and every inline `deps` literal —
     a `perl -0pi` over the identical `createRandom: () => new SeededRandom(SEED),` line is the quickest
     uniform fix; the makeDeps + counting-factory literals differ and need individual edits.
+---
+
+## 2026-06-28 - US-022 (Shareable reproducible walks via ?seed= URL) — REFINEMENT
+- US-022 already passed; re-verified all ACs end to end and made one focused robustness improvement.
+- Re-verification (all green): npm run clean + npm test -> 252 pass; verify:renderer ALL PASSED;
+  verify:controls 33 checks; verify:main 12->13 checks. ACs 1-7 confirmed; AC8 (live browser screenshot)
+  remains pending — no browser/Playwright MCP in this env (carried caveat from US-013..021).
+- Refinement (AC1 robustness): tightened `parseIntParam` in src/adapters/walk-url.ts from a bare
+  `Number.parseInt(raw, 10)` to a STRICT base-10-integer gate (`/^-?\d+$/` after `.trim()`). The bare
+  parseInt was too lenient for a shareable link — it accepts trailing garbage (`"5abc"->5`) and silently
+  truncates/mis-reads non-decimals (`"3.7"->3`, `"0x10"->0`, `"1e3"->1`) — so a hand-edited/malformed
+  `?seed=`/`?count=` would quietly seed a partial value instead of, as AC1 requires ("with no seed param,
+  behaviour is unchanged"), falling back to a fresh entropy walk. This makes the implementation match its
+  own doc-comment contract ("null if absent/blank/non-numeric"). Canonicalisation of a CLEAN value to
+  uint32 (negative/>=2^32 wrap, float trunc) stays SeededRandom's job (`seed >>> 0`) — walk-url only
+  answers "is this a base-10 integer at all?"; no duplication.
+- Files changed:
+  - src/adapters/walk-url.ts — strict `parseIntParam` (+ expanded doc comment explaining why).
+  - scripts/verify-main.mjs — +1 check (12->13): partial-numeric/decimal/hex/exponent params read as
+    null, while a clean signed (`-5`) / whitespace-padded (`%2040%20`) integer is still honoured.
+  - src/adapters/CLAUDE.md — walk-url.ts section: added the STRICT integer-parsing bullet.
+  - scripts/ralph/prd.json — US-022 notes append (the refinement); progress.txt — Codebase Patterns +
+    this entry.
+- Gate PROVEN TO BITE then reverted (precise Edit, NOT git checkout — uncommitted story file; npm run
+  clean after): reverting `parseIntParam` to lenient `Number.parseInt` fails the new verify:main check
+  with "trailing-garbage params read as null (not a truncated seed)".
+- **Learnings for future iterations:**
+  - When parsing a query/URL integer for a SHAREABLE link, gate on `/^-?\d+$/` (after trim) BEFORE
+    `parseInt` — bare `parseInt` honours `"5abc"`/`"3.7"`/`"0x10"`/`"1e3"` as partial values. Keep uint32
+    canonicalisation in the consumer (SeededRandom), not the parser. (Now a Codebase Pattern above.)
+  - verify:main is the gate for the production URL gateway (`productionWalkUrl`) — adapters aren't in
+    `npm test`. To headlessly exercise its parse, stub `globalThis.window = { location: { search, ... },
+    history }` and reset to `undefined` in a `finally`; `%20` in a search string decodes to a space via
+    URLSearchParams, so `count=%2040%20` is the way to test the parser's `.trim()`.
 ---

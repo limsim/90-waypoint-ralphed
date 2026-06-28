@@ -27,10 +27,20 @@ export interface WalkUrl {
 const SEED_PARAM = "seed";
 const COUNT_PARAM = "count";
 
-/** Parse a base-10 integer query value, or `null` if it is absent / blank / non-numeric. */
+/**
+ * Parse a base-10 integer query value, or `null` if it is absent / blank / not a whole integer.
+ *
+ * Strict on purpose: a value is honoured ONLY if (after trimming) it is a clean optionally-signed run
+ * of digits. `Number.parseInt` alone is too lenient for a shareable link — it accepts trailing garbage
+ * (`"5abc" → 5`) and silently truncates decimals (`"3.7" → 3`), so a hand-edited / malformed URL would
+ * quietly seed with a partial value instead of, as the contract and US-022 AC1 require, behaving as if
+ * no seed were present (a fresh entropy walk). The regex gate makes "non-numeric → null" actually hold.
+ */
 function parseIntParam(raw: string | null): number | null {
-  if (raw === null || raw.trim() === "") return null;
-  const n = Number.parseInt(raw, 10);
+  if (raw === null) return null;
+  const trimmed = raw.trim();
+  if (!/^-?\d+$/.test(trimmed)) return null;
+  const n = Number.parseInt(trimmed, 10);
   return Number.isFinite(n) ? n : null;
 }
 

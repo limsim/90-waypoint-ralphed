@@ -260,6 +260,17 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   headless gates) is side-effect-free — same idea as main.ts's `typeof document` auto-run guard. This is
   why the `verify:main` bootstrap checks (no window) see the unchanged entropy behaviour; the URL
   read/reflect is tested separately by stubbing `globalThis.window` with `location`+`history`.
+- **STRICT integer parsing** (`parseIntParam`): a `?seed=`/`?count=` value is honoured ONLY if, after
+  trimming, it is a clean optionally-signed run of digits (`/^-?\d+$/`). Bare `Number.parseInt` is too
+  lenient for a shareable link — it accepts trailing garbage (`"5abc" → 5`) and silently truncates
+  decimals / mis-reads other bases (`"3.7" → 3`, `"0x10" → 0`, `"1e3" → 1`) — so a hand-edited / malformed
+  URL would quietly seed with a partial value instead of, as the contract + AC1 ("with no seed param,
+  behaviour is unchanged") require, falling back to a fresh entropy walk. Canonicalisation of a CLEAN
+  value to uint32 (negative wrap, ≥2^32 wrap, float trunc) is `SeededRandom`'s job (`seed >>> 0`), NOT
+  walk-url's — don't duplicate it here; walk-url only decides "is this a base-10 integer at all?".
+  `verify:main` guards it: partial-numeric / decimal / hex / exponent params read as `null`; a clean
+  signed / whitespace-padded integer is still honoured (proven to bite — reverting to lenient `parseInt`
+  makes `"5abc"` read as `5`).
 - **Reproducibility is a DOMAIN guarantee** surfaced here: `SeededRandom.seed` (domain) exposes the
   canonical uint32 seed (captured at construction, fixed as the stream advances), and `createRandom`
   reports it; `walk-url` just round-trips that number through the address bar. The dedicated
