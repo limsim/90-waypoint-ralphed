@@ -383,6 +383,19 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   over the map); and extend verify:controls (a behaviour check that it's shown on the trigger + hidden
   on dismiss, and an index.html-markup check for the element + its golden text scoped to its own block).
   Prove each new gate bites then revert via a precise Edit (NOT git checkout — uncommitted story files).
+- "Shown OVER the canvas" (US-020 AC1, also the loading overlay/tooltip) is STRUCTURAL — `position:
+  absolute` in CSS does NOT prove an element covers the canvas. An absolutely-positioned element covers
+  the canvas only if it is (a) a DESCENDANT of the `position: relative` `.canvas-wrap` (the containing
+  block holding the canvas + overlays) AND (b) given `inset: 0` so it SPANS that block rather than
+  sitting at its static-flow corner. So a markup gate for any "over the canvas" overlay must assert BOTH
+  the element id sits inside the `.canvas-wrap` block AND `inset: 0`, not just `position: absolute`
+  (which stays green if the overlay is moved out of `.canvas-wrap` or loses `inset: 0` — both float the
+  message off the map). To prove CONTAINMENT in a regex-only harness use a div-balancing helper
+  (`divBlockFrom(html, openIdx)`: walk `<div>`/`</div>` from the opening tag, return the slice where
+  depth hits 0) — a non-greedy `<div>…</div>` stops at the first INNER `</div>` and so can't contain
+  nested overlays. Same shape as the legend's "below the canvas" document-order check (`html.search`
+  positions). To prove such a check bites you must MOVE the element out (not delete it — deletion trips
+  the earlier CONTROL_IDS-existence check instead of the targeted containment one).
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1983,4 +1996,42 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - New adapter chrome shown via INLINE style.display MUST be added to the @media print hide list with
     `!important` (US-019 gotcha) — verify:controls item 7's mustImportant set + selector loop both need
     the new id, or a stuck overlay/error prints over the map.
+---
+
+## 2026-06-28 - US-020 (Graceful generation-failure error) — REFINEMENT
+- US-020 already passed; re-verified all acceptance criteria green end to end (npm run clean; tsc -b
+  clean; npm test 243 pass; verify:renderer green; verify:controls green). The impl (adapter showError/
+  hideError, #error-overlay markup/CSS, print hide list) was already correct — no impl change.
+- Refinement (verify:controls + docs only): hardened the gate's reading of AC1's "shown OVER the
+  canvas". Item 5b previously proved only `#error-overlay { position: absolute }` in CSS — which does
+  NOT imply the overlay covers the canvas. An absolutely-positioned element covers the canvas only if
+  it is (a) a DESCENDANT of the position:relative `.canvas-wrap` (its containing block, shared with the
+  canvas + loading overlay) AND (b) given `inset: 0` so it SPANS that block instead of sitting at its
+  static-flow corner. Neither was asserted, so moving `#error-overlay` OUT of `.canvas-wrap` (it would
+  resolve against the wrong ancestor / the viewport and float off the map) or dropping its `inset: 0`
+  (a small box wherever the flow put it) both kept the bare position:absolute check green.
+- Added to verify-controls.mjs item 5b: a `divBlockFrom(html, openIdx)` helper that balances
+  `<div>`/`</div>` from the opening tag (a non-greedy `<div>...</div>` would stop at the first inner
+  `</div>` and miss the nested overlays, so it can't prove containment), then THREE assertions — the
+  `#error-overlay` id appears INSIDE the div-balanced `.canvas-wrap` block; `.canvas-wrap` is
+  `position: relative`; and `#error-overlay` has `inset: 0`. Mirrors the legend's "below the canvas"
+  document-order structural check (item 6).
+- Files changed: scripts/verify-controls.mjs (helper + 3 assertions, updated item-5b comment +
+  summary line), src/adapters/CLAUDE.md (US-020 note extended with the structural-over-the-canvas
+  gotcha), scripts/ralph/prd.json (US-020 refinement note), scripts/ralph/progress.txt (this entry +
+  a Codebase Patterns entry).
+- BOTH new gates PROVEN TO BITE then reverted via precise Edits (NOT git checkout):
+  - Moved `#error-overlay` outside `.canvas-wrap` -> "error overlay is INSIDE .canvas-wrap" failed.
+  - Dropped `inset: 0` -> "error overlay spans the canvas (inset: 0)" failed.
+  Re-ran the full gate after reverting: tsc -b clean; npm test 243 pass; verify:renderer green;
+  verify:controls 27/27 green.
+- **Learnings for future iterations:**
+  - "Over the canvas" is STRUCTURAL, not `position: absolute` — assert containment in `.canvas-wrap`
+    (the position:relative block) AND `inset: 0`. Applies to the loading overlay + tooltip too; their
+    markup gates currently still check only `position: absolute`, so the same hardening could be applied
+    there if a future story touches them.
+  - To prove a CONTAINMENT check bites, MOVE the element out (keep it existing) — DELETING it trips the
+    earlier CONTROL_IDS-existence assertion instead of the targeted containment one.
+  - `divBlockFrom` (balance `<div>`/`</div>` from the open tag) is the div analogue of item 7's
+    `blockFrom` (balance `{`/`}`); reuse it whenever a regex must contain an element with nested divs.
 ---

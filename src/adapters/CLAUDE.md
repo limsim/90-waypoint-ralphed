@@ -197,6 +197,16 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   check; the index.html-markup block asserts the `#error-overlay` element exists, carries the EXACT AC
   message (golden text hard-coded, scoped to the `#error-overlay` block — proven to bite), is
   `role=alert` + `position:absolute`, and is in the print hide list (`!important`).
+  - GOTCHA — "OVER the canvas" (AC1) is STRUCTURAL, not `position: absolute`. An absolutely-positioned
+    element covers the canvas only if it is (a) a DESCENDANT of the `position: relative` `.canvas-wrap`
+    (its containing block, shared with the canvas + loading overlay) and (b) given `inset: 0` so it
+    SPANS that block instead of sitting at its static-flow corner. The bare `position:absolute` check
+    proves NEITHER — moving `#error-overlay` out of `.canvas-wrap`, or dropping its `inset: 0`, floats
+    the message off the map yet keeps that check green (both proven to bite). So `verify:controls` item
+    5b also asserts the overlay id appears INSIDE the div-balanced `.canvas-wrap` block (a helper
+    `divBlockFrom(html, openIdx)` balances `<div>`/`</div>` — a non-greedy `<div>…</div>` would stop at
+    the first inner `</div>` and miss nested overlays), that `.canvas-wrap` is `position: relative`, and
+    that `#error-overlay` has `inset: 0`. Mirrors the legend's "below the canvas" document-order check.
 - CAVEAT (carried from US-013/14/15/16): a LIVE browser screenshot for human sign-off is still pending —
   no browser/Playwright MCP in this env, and the controls (incl. US-017 click/hover, which need
   `DomControls` constructed) only become interactive once US-021 wires main.ts (composition root +

@@ -517,6 +517,19 @@ function ok(label) {
   const attr = (tag, name) =>
     tag.match(new RegExp(`\\b${name}=["']([^"']*)["']`, "i"))?.[1] ?? null;
   const hasBoolAttr = (tag, name) => new RegExp(`\\b${name}\\b`, "i").test(tag);
+  // The full markup of a <div> element (incl. nested divs) starting at `openIdx`, by balancing
+  // <div>/</div> tags — a non-greedy `<div ...>...</div>` regex would stop at the FIRST inner </div>
+  // and so couldn't prove containment of a nested overlay. Returns null if the tags don't balance.
+  const divBlockFrom = (markup, openIdx) => {
+    const tag = /<\/?div\b/gi;
+    tag.lastIndex = openIdx;
+    let depth = 0;
+    for (let m = tag.exec(markup); m !== null; m = tag.exec(markup)) {
+      depth += m[0][1] === "/" ? -1 : 1;
+      if (depth === 0) return markup.slice(openIdx, markup.indexOf(">", m.index) + 1);
+    }
+    return null;
+  };
 
   // 1. Every element fromDocument() resolves by CONTROL_IDS must actually exist in index.html, or
   //    the live app throws "required element not found" at startup (untested by the fake-doc check).
@@ -567,7 +580,33 @@ function ok(label) {
   assert.ok(errorBlock.includes(ERROR_MESSAGE), `error overlay shows the exact AC message: "${ERROR_MESSAGE}"`);
   assert.ok(/\brole=["']alert["']/i.test(errorBlock), "error overlay is role=alert (announced to assistive tech)");
   assert.ok(/#error-overlay\s*\{[^}]*position:\s*absolute/i.test(html), "error overlay is absolutely positioned (over the canvas)");
-  ok("Error overlay (US-020): DOM overlay over the canvas with the exact failure message");
+
+  // AC1 says the error is shown OVER THE CANVAS — and `position: absolute` alone does NOT prove that.
+  // An absolutely-positioned element covers the canvas only if it is (a) a DESCENDANT of the
+  // `position: relative` `.canvas-wrap` (its containing block, shared with the canvas + loading
+  // overlay) and (b) given `inset: 0` so it SPANS that block rather than sitting at its static-flow
+  // corner. Without (a) the message would resolve against a different ancestor (or the viewport) and
+  // float off the map; without (b) it would be a small box wherever the flow put it. Neither was
+  // asserted — the bare position:absolute check above stays green through both regressions (proven to
+  // bite: move `#error-overlay` out of `.canvas-wrap`, or drop its `inset: 0`). So pin the structure
+  // here (mirrors the legend's "below the canvas" document-order check in item 6).
+  const wrapOpenAt = html.search(/<div\b[^>]*\bclass=["'][^"']*\bcanvas-wrap\b/i);
+  assert.ok(wrapOpenAt !== -1, "index.html has the .canvas-wrap element");
+  const wrapBlock = divBlockFrom(html, wrapOpenAt);
+  assert.ok(wrapBlock, "index.html .canvas-wrap is a balanced <div> ... </div> block");
+  assert.ok(
+    /\bid=["']error-overlay["']/i.test(wrapBlock),
+    "error overlay is INSIDE .canvas-wrap (so it covers the canvas, not the rest of the page)"
+  );
+  assert.ok(
+    /\.canvas-wrap\s*\{[^}]*position:\s*relative/i.test(html),
+    ".canvas-wrap is position:relative (the overlay's containing block, so inset:0 resolves to it)"
+  );
+  assert.ok(
+    /#error-overlay\s*\{[^}]*inset:\s*0/i.test(html),
+    "error overlay spans the canvas (inset: 0) — position:absolute alone leaves it at its flow corner"
+  );
+  ok("Error overlay (US-020): DOM overlay OVER the canvas (inside .canvas-wrap, inset:0) with the exact failure message");
 
   // 6. Legend (US-018): a DOM/HTML legend BELOW the canvas (not canvas-painted) with three entries —
   //    Start/End, Waypoint, Wildcard — whose swatches MIRROR the canvas symbol colours. There is no
