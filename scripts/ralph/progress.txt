@@ -383,6 +383,21 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   over the map); and extend verify:controls (a behaviour check that it's shown on the trigger + hidden
   on dismiss, and an index.html-markup check for the element + its golden text scoped to its own block).
   Prove each new gate bites then revert via a precise Edit (NOT git checkout — uncommitted story files).
+- A headless adapter gate that STUBS a use case (e.g. `generateWalk.execute = async () => ({ok:false})`)
+  proves only the adapter's REACTION to a signal — NOT that the real pipeline produces that signal. For
+  an AC about the UNDERLYING bounded behaviour (US-020 AC2 "reached via the bounded generator, not an
+  infinite loop"), drive the REAL use case + REAL domain service to that terminal state THROUGH the
+  adapter, mirroring the SUCCESS path on the FAILURE side (verify:controls' success path already drives
+  a real GenerateWalk via makeDeps; the failure path stubbed it — an asymmetry). DomControls calls
+  `execute(count, random)` with no config, so wrap execute to inject the proven `EXHAUSTING_CONFIG`
+  (100×100 region nothing fits, maxGrowths:0, 3 attempts/3 rerolls — from tests/generate-walk.test.ts)
+  as the 3rd arg; set the waypoint input to "10" (the proven exhausting count). Assert the AC two ways:
+  (a) the awaited `generate()` SETTLES within a `withTimeout(p, 5000, …)` race (a hung/unbounded
+  generator trips a failed check rather than hanging the whole gate forever; `timer.unref()` so it
+  never keeps the process alive), and (b) the adapter shows the error + restores controls on the GENUINE
+  signal. PROVE it bites by ENLARGING the region so the real generator SUCCEEDS — the "draws nothing"
+  assertion then fires (proving the check isn't vacuous). Reuse this shape for US-022 (also through
+  DomControls/GenerateWalk). The footer prints `passed` dynamically, so adding a check needs no count bump.
 - "Shown OVER the canvas" (US-020 AC1, also the loading overlay/tooltip) is STRUCTURAL — `position:
   absolute` in CSS does NOT prove an element covers the canvas. An absolutely-positioned element covers
   the canvas only if it is (a) a DESCENDANT of the `position: relative` `.canvas-wrap` (the containing
@@ -2034,4 +2049,51 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     earlier CONTROL_IDS-existence assertion instead of the targeted containment one.
   - `divBlockFrom` (balance `<div>`/`</div>` from the open tag) is the div analogue of item 7's
     `blockFrom` (balance `{`/`}`); reuse it whenever a regex must contain an element with nested divs.
+---
+
+## 2026-06-28 04:43 BST - US-020 (Graceful generation-failure error) — REFINEMENT 2
+- US-020 already passed; this is a refinement pass. Re-verified all acceptance criteria green and closed
+  the one AC with the weakest direct coverage in US-020's OWN gate: AC2 ("the UI never hangs: this path
+  is reached via the bounded generator, not an infinite loop"). All three existing US-020 failure checks
+  STUB `generateWalk.execute` to return `{ ok:false }` instantly — they prove only the adapter's REACTION
+  to a failure signal, never that the REAL bounded pipeline produces that signal in finite time through
+  DomControls. (The SUCCESS path, by contrast, drives a real GenerateWalk via `makeDeps` — an asymmetry.)
+- What was implemented (verify:controls harness only — NO impl change; the error overlay markup/CSS/
+  adapter logic was already correct):
+  - Added an end-to-end check (27 -> 28) that drives the REAL `walkGenerator` — through the REAL
+    `GenerateWalk` iterator-driver — to its exhausted-re-roll failure using `EXHAUSTING_CONFIG` (a
+    100×100 region nothing fits, `maxGrowths:0`, 3 attempts / 3 rerolls), mirroring
+    `tests/generate-walk.test.ts`. DomControls calls `execute(count, random)` with no config, so the
+    test wraps `execute` to inject the config as the 3rd arg; the waypoint input is set to "10" (the
+    proven exhausting count). AC2 is asserted two ways: (a) the awaited `generate()` SETTLES within a
+    `withTimeout(p, 5000, …)` race — a hung/unbounded generator trips a failed CHECK rather than hanging
+    the whole gate forever (the timer is `unref()`'d so it never keeps the process alive); (b) DomControls
+    then shows the error overlay (`display:flex`) + restores the controls (button re-enabled, loading
+    overlay hidden) + draws nothing, on a GENUINE (non-stubbed) signal.
+  - New harness imports/helpers: `Bounds` (from `dist/src/domain/bounds.js`), the `EXHAUSTING_CONFIG`
+    literal, and a `withTimeout(promise, ms, label)` helper.
+- Files changed:
+  - scripts/verify-controls.mjs (the end-to-end AC2 check + Bounds import + EXHAUSTING_CONFIG + withTimeout)
+  - scripts/ralph/prd.json (US-020 notes: appended REFINEMENT 2)
+  - scripts/ralph/progress.txt (this entry + a new Codebase Pattern)
+  - src/adapters/CLAUDE.md (the "stub proves reaction; real pipeline proves the bounded AC" learning)
+- PROVEN TO BITE then reverted via a precise Edit (NOT git checkout — verify-controls.mjs is uncommitted):
+  enlarging `EXHAUSTING_CONFIG`'s region to 100000×100000 lets the real generator SUCCEED, firing the
+  "a real bounded-generator failure draws nothing" AssertionError (it drew 1) — proving the new check
+  genuinely exercises the bounded failure path and is not a vacuous pass.
+- VERIFIED: `npm run clean` + `tsc -b` clean (typecheck); `npm test` -> 243 pass (no regressions —
+  adapters carry no node:tests by design); `npm run verify:renderer` all assertions pass;
+  `npm run verify:controls` 28/28 green.
+- CAVEAT (carried from US-013..019): no browser/Playwright MCP in this env, so the LIVE
+  browser-automation screenshot for human sign-off remains pending; the error overlay becomes visible
+  in the served app once US-021 wires main.ts. The headless gate stands in for the functional ACs.
+- **Learnings for future iterations:**
+  - A headless adapter gate that STUBS a use case proves only the adapter's REACTION to a signal, not
+    that the real pipeline produces it. For an AC about the underlying domain behaviour (e.g. "bounded /
+    never hangs"), drive the REAL use case + domain service to that terminal state through the adapter,
+    and wrap the await in a timeout so a hang fails a check instead of the whole gate. See the new
+    Codebase Pattern. Reuse this for US-022 (also routed through DomControls/GenerateWalk).
+  - DomControls passes no GeneratorConfig to `execute`, so to force the bounded FAILURE path end-to-end
+    through the adapter, wrap `execute` to inject `EXHAUSTING_CONFIG` (100×100 region / maxGrowths:0 /
+    3 attempts / 3 rerolls, count 10) — the same config `tests/generate-walk.test.ts` uses.
 ---

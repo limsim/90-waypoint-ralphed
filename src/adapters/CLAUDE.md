@@ -207,6 +207,25 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
     `divBlockFrom(html, openIdx)` balances `<div>`/`</div>` — a non-greedy `<div>…</div>` would stop at
     the first inner `</div>` and miss nested overlays), that `.canvas-wrap` is `position: relative`, and
     that `#error-overlay` has `inset: 0`. Mirrors the legend's "below the canvas" document-order check.
+  - GOTCHA — a STUBBED use case proves only the adapter's REACTION, not the bounded AC. All three of
+    `verify:controls`' US-020 failure checks stub `generateWalk.execute = async () => ({ ok:false, … })`,
+    which proves DomControls shows the error + restores the controls on a failure SIGNAL — but NOT AC2
+    ("this path is reached via the bounded generator, not an infinite loop"): a stub can't hang, so its
+    completion proves nothing about termination, and it hard-codes the signal SHAPE so a broken generator
+    or a `GenerateWalk` that stopped surfacing `{ ok:false }` faithfully would still pass. The SUCCESS
+    path drives a REAL `GenerateWalk` (via `makeDeps`); the failure path should too. So `verify:controls`
+    also has an END-TO-END check that drives the REAL `walkGenerator` — through the REAL `GenerateWalk`
+    iterator-driver — to its exhausted-re-roll failure with `EXHAUSTING_CONFIG` (a 100×100 region nothing
+    fits, `maxGrowths:0`, 3 attempts / 3 rerolls — the same config `tests/generate-walk.test.ts` uses).
+    `DomControls` calls `execute(count, random)` with no config, so the test WRAPS `execute` to inject the
+    config as the 3rd arg, and sets the waypoint input to "10" (the proven exhausting count). AC2 is
+    asserted two ways: (a) the awaited `generate()` SETTLES within a `withTimeout(p, 5000, …)` race — a
+    hung/unbounded generator trips a failed check rather than hanging the whole gate forever (the timer
+    is `unref()`'d so it never keeps the process alive); (b) the adapter then shows the error + restores
+    the controls + draws nothing, on a GENUINE signal. Proven to bite by ENLARGING the region so the real
+    generator SUCCEEDS — "a real bounded-generator failure draws nothing" then fires (it drew 1). The same
+    "drive the real pipeline to a terminal state through the adapter, with a timeout" shape applies to
+    US-022 (also routed through `DomControls`/`GenerateWalk`).
 - CAVEAT (carried from US-013/14/15/16): a LIVE browser screenshot for human sign-off is still pending —
   no browser/Playwright MCP in this env, and the controls (incl. US-017 click/hover, which need
   `DomControls` constructed) only become interactive once US-021 wires main.ts (composition root +

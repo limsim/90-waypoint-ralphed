@@ -21,8 +21,23 @@ const { DomControls, CONTROL_IDS } = await import(`${dist}/adapters/dom-controls
 const { GenerateWalk } = await import(`${dist}/application/generate-walk.js`);
 const { ClearWalk } = await import(`${dist}/application/clear-walk.js`);
 const { SeededRandom } = await import(`${dist}/domain/seeded-random.js`);
+const { Bounds } = await import(`${dist}/domain/bounds.js`);
 
 const SEED = 4242;
+
+/**
+ * A generator config that NO placement can satisfy: a 100×100 region too small to fit even a
+ * 10-waypoint walk, with no growth (`maxGrowths: 0`) so a bigger canvas never rescues it, exhausting
+ * in a few bounded re-rolls. Mirrors `tests/generate-walk.test.ts`'s `EXHAUSTING_CONFIG`, so US-020's
+ * end-to-end failure check drives the SAME proven exhausted-re-roll path. DomControls passes no config
+ * to `execute`, so the test wraps `execute` to inject this as the third argument.
+ */
+const EXHAUSTING_CONFIG = {
+  initialRegion: new Bounds(0, 0, 100, 100),
+  maxGrowths: 0,
+  maxPlacementAttempts: 3,
+  maxRerolls: 3,
+};
 
 /** A fake DOM element: records added listeners + lets the harness dispatch events synchronously. */
 function fakeEl(props = {}) {
@@ -120,6 +135,25 @@ function makeDeps(yieldPort = { yieldToEventLoop: () => Promise.resolve() }, see
 
 /** Drain all pending microtasks (the immediate Yield port resolves as microtasks). */
 const drainMicrotasks = () => new Promise((r) => setImmediate(r));
+
+/**
+ * Reject if `promise` does not settle within `ms`. This turns US-020 AC2 ("the UI never hangs") into a
+ * real assertion: a regression that made generation unbounded would hang the awaited `generate()`, and
+ * the timeout trips it as a failed check rather than hanging the whole gate forever. The timer is
+ * unref'd so it never keeps the process alive once the promise wins.
+ */
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`${label}: did not settle within ${ms}ms (unbounded generation / hang?)`)),
+        ms
+      );
+      timer.unref?.();
+    }),
+  ]);
+}
 
 let passed = 0;
 function ok(label) {
@@ -348,6 +382,51 @@ function ok(label) {
   els.clearButton.dispatch("click");
   assert.equal(els.errorOverlay.style.display, "none", "Clear dismisses the generation-failure error");
   ok("Clear dismisses the generation-failure error overlay");
+}
+
+// ── US-020 AC2 end-to-end: the REAL bounded generator reaches { ok:false } WITHOUT hanging ──
+// The three checks above stub `generateWalk.execute` to return { ok:false } instantly, proving only
+// the adapter's REACTION to a failure signal. This one mirrors the SUCCESS path (which drives a real
+// GenerateWalk via makeDeps) on the FAILURE side: it drives the REAL walkGenerator — through the REAL
+// GenerateWalk iterator-driver — to its exhausted-re-roll failure with a config no placement can
+// satisfy (EXHAUSTING_CONFIG). AC2 ("this path is reached via the bounded generator, not an infinite
+// loop") is asserted two ways: (a) the awaited generate() SETTLES within a generous timeout — an
+// unbounded/hung generator would trip it; (b) DomControls then shows the error + restores the controls
+// on a GENUINE (non-stubbed) signal. DomControls calls execute(count, random) with no config, so wrap
+// execute to inject EXHAUSTING_CONFIG as the third argument.
+{
+  const renderer = makeFakeRenderer();
+  const realGenerate = new GenerateWalk({ yieldToEventLoop: () => Promise.resolve() });
+  const deps = {
+    generateWalk: {
+      execute: (count, random) => realGenerate.execute(count, random, EXHAUSTING_CONFIG),
+    },
+    clearWalk: new ClearWalk(renderer),
+    renderer,
+    createRandom: () => new SeededRandom(SEED),
+  };
+  const els = makeElements();
+  els.waypointInput.value = "10"; // count=10: the proven exhausting case (nothing fits a 100×100 region)
+  const controls = new DomControls(deps, els);
+
+  await withTimeout(
+    controls.generate(),
+    5000,
+    "real bounded-generator failure (US-020 AC2: must not hang)"
+  );
+  assert.equal(renderer.drawsOf().length, 0, "a real bounded-generator failure draws nothing");
+  assert.equal(
+    els.errorOverlay.style.display,
+    "flex",
+    "error overlay shown for a REAL bounded-generator failure (US-020)"
+  );
+  assert.equal(
+    els.generateButton.disabled,
+    false,
+    "controls restored after a real bounded failure (button re-enabled)"
+  );
+  assert.equal(els.loadingOverlay.style.display, "none", "loading overlay hidden after a real bounded failure");
+  ok("End-to-end (US-020 AC2): the REAL bounded generator reaches { ok:false } without hanging → error overlay + controls restored");
 }
 
 // ── Robustness: controls restored in finally even when generation THROWS ──
