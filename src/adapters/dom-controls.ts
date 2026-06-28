@@ -6,6 +6,7 @@ import { DisplayOptions } from "../application/renderer-port.js";
 import { GenerateWalk } from "../application/generate-walk.js";
 import { ClearWalk } from "../application/clear-walk.js";
 import { InteractiveRenderer } from "./interactive-renderer.js";
+import { WalkUrl } from "./walk-url.js";
 
 /**
  * DOM control-surface adapter (docs/adr/0003).
@@ -23,9 +24,13 @@ import { InteractiveRenderer } from "./interactive-renderer.js";
  * generated {@link Walk} (a pure view/UI concern, not domain state) and re-invokes the renderer when
  * a toggle changes. A fresh Generate replaces it; Clear drops it.
  *
- * Seeding stays out of here: a fresh {@link RandomSource} is produced per generation via the injected
- * `createRandom` factory, keeping this adapter seed-agnostic. US-021 wires the entropy-seeded
- * production source; US-022 layers the `?seed=` URL behaviour on top — neither changes this class.
+ * Seeding/URL handling (US-022): a fresh stream is produced per generation via the injected
+ * {@link RandomFactory}. Given a seed it reproduces that exact stream; given nothing it mints a fresh
+ * entropy seed and REPORTS it. On construction this adapter reads any `?seed=`/`?count=` from the
+ * injected {@link WalkUrl} (the only URL boundary) — the seed seeds just the FIRST generation (so a
+ * shared link reproduces that walk) and the count pre-fills the input — and after every successful
+ * generation it reflects the seed + count that produced the walk back into the URL, so the address
+ * bar is always a shareable link. The domain stays entirely seed/URL-agnostic.
  */
 
 /** Waypoint-count input bounds and default (matches the `<input>` attributes in index.html). */
@@ -50,18 +55,33 @@ export const CONTROL_IDS = {
 /** Offset (px) of the tooltip's top-left from the click point, so it sits clear of the cursor. */
 const TOOLTIP_OFFSET = 12;
 
-/** Collaborators injected by the composition root (US-021). */
+/** A freshly minted random stream paired with the canonical seed that produced it (US-022). */
+export interface SeededSource {
+  /** The deterministic random stream for one generation. */
+  readonly source: RandomSource;
+  /** The canonical seed that produced {@link source}; reflected into the URL so the walk is shareable. */
+  readonly seed: number;
+}
+
+/**
+ * Produces a {@link SeededSource} for one generation. Given a `seed` (e.g. from a `?seed=` URL) it
+ * reproduces that exact stream; given nothing it mints a fresh entropy-seeded stream and REPORTS the
+ * seed it chose, so {@link DomControls} can reflect it into the URL. The composition root supplies the
+ * production factory (US-021/US-022); keeping seed minting out of this adapter leaves it seed-agnostic.
+ * It must be a factory (not a single shared instance) so each Generate starts an independent stream —
+ * a shared mutable source would make walk N depend on prior draws, breaking single-seed reproducibility.
+ */
+export type RandomFactory = (seed?: number) => SeededSource;
+
+/** Collaborators injected by the composition root (US-021/US-022). */
 export interface DomControlsDeps {
   readonly generateWalk: GenerateWalk;
   readonly clearWalk: ClearWalk;
   readonly renderer: InteractiveRenderer;
-  /**
-   * Produces a fresh {@link RandomSource} for each generation. US-021 supplies an entropy-seeded
-   * source by default; US-022 supplies a `?seed=`-derived one. Keeping it a factory (not a single
-   * shared instance) ensures each Generate starts a fresh deterministic stream, which US-022's
-   * single-seed reproducibility depends on.
-   */
-  readonly createRandom: () => RandomSource;
+  /** Mints the per-generation random stream + reports its seed (see {@link RandomFactory}). */
+  readonly createRandom: RandomFactory;
+  /** Reads `?seed=`/`?count=` on load and reflects the current walk's seed + count back (US-022). */
+  readonly walkUrl: WalkUrl;
 }
 
 /** The DOM elements this adapter drives. Resolved from index.html by {@link DomControls.fromDocument}. */
@@ -88,11 +108,19 @@ export class DomControls {
   /** The waypoint the pointer is currently over (US-017 hover), or null. Drives the cursor + highlight. */
   private hoveredWaypoint: Waypoint | null = null;
 
+  /**
+   * The `?seed=` override read from the URL on construction (US-022), or null. It seeds ONLY the first
+   * generation — so opening a shared link reproduces that exact walk — then is consumed by
+   * {@link takeSeedOverride}, after which every Generate mints a fresh entropy seed.
+   */
+  private pendingUrlSeed: number | null = null;
+
   constructor(
     private readonly deps: DomControlsDeps,
     private readonly elements: DomControlsElements
   ) {
     this.wire();
+    this.applyUrlParams();
   }
 
   /**
@@ -146,20 +174,26 @@ export class DomControls {
    *
    * Everything after `setBusy(true)` runs inside the `try`, so ANY failure — the clear, the
    * generation, or the draw — still hits the `finally` and restores the controls; the busy state is
-   * never stranded. A fresh {@link RandomSource} is produced per call via `createRandom`, so each
-   * Generate starts an independent deterministic stream (US-022's single-seed reproducibility). The
-   * leading `clear()` also dismisses any error left over from a previous failed attempt, so a retry
-   * (or a smaller waypoint count) starts from a clean slate.
+   * never stranded. A fresh {@link SeededSource} is produced per call via `createRandom` (seeded from
+   * the one-shot `?seed=` URL override on the first call, else fresh entropy), so each Generate starts
+   * an independent deterministic stream. On success the seed + count that produced the walk are
+   * reflected into the URL (US-022), making the address bar a shareable link. The leading `clear()`
+   * also dismisses any error left over from a previous failed attempt, so a retry (or a smaller
+   * waypoint count) starts from a clean slate.
    */
   async generate(): Promise<void> {
     this.setBusy(true);
     try {
       this.clear();
       const count = this.readCount();
-      const result = await this.deps.generateWalk.execute(count, this.deps.createRandom());
+      const { source, seed } = this.deps.createRandom(this.takeSeedOverride());
+      const result = await this.deps.generateWalk.execute(count, source);
       if (result.ok) {
         this.currentWalk = result.walk;
         this.deps.renderer.draw(result.walk, this.displayOptions());
+        // Reflect the seed + count that produced THIS walk into the URL so it is shareable and
+        // revisitable (US-022 AC2/AC3). Only on success — a failed generation has no walk to share.
+        this.deps.walkUrl.reflect({ seed, count });
       } else {
         // The bounded generator exhausted its re-rolls (ADR-0002): show a clear error over the
         // (already-cleared) canvas rather than leaving the user with a silent blank or a hang.
@@ -282,6 +316,33 @@ export class DomControls {
     const parsed = Number.parseInt(this.elements.waypointInput.value, 10);
     if (!Number.isFinite(parsed)) return DEFAULT_WAYPOINTS;
     return Math.min(MAX_WAYPOINTS, Math.max(MIN_WAYPOINTS, parsed));
+  }
+
+  /**
+   * Read the shareable `?seed=`/`?count=` URL parameters once on construction (US-022 AC1). A URL
+   * count pre-fills the waypoint input (so the reproduced walk uses the same count — `readCount` then
+   * clamps it to [10, 90] like any typed value), and a URL seed is held for the FIRST generation via
+   * {@link takeSeedOverride}. With no params, behaviour is unchanged (a fresh entropy-seeded walk).
+   * All URL access is confined to the injected {@link WalkUrl} gateway — the domain stays seed-agnostic.
+   */
+  private applyUrlParams(): void {
+    const { seed, count } = this.deps.walkUrl.read();
+    this.pendingUrlSeed = seed;
+    if (count !== null) {
+      this.elements.waypointInput.value = String(count);
+    }
+  }
+
+  /**
+   * The seed override for the NEXT generation: the one-shot `?seed=` URL value if present (consumed
+   * here so it seeds only the first generation), otherwise `undefined` so {@link RandomFactory} mints
+   * a fresh entropy seed. This is what makes a shared link reproduce its walk on load while every
+   * later Generate produces a new random walk (US-022 AC1).
+   */
+  private takeSeedOverride(): number | undefined {
+    const seed = this.pendingUrlSeed;
+    this.pendingUrlSeed = null;
+    return seed ?? undefined;
   }
 
   /** Toggle the busy state: disable the Generate button and show/hide the loading overlay. */

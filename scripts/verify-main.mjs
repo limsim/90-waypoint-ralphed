@@ -32,6 +32,7 @@ const mainUrl = pathToFileURL(resolve(dist, "main.js")).href;
 // proves the "importing main.js in Node has no side effects" clause.
 const { bootstrap, productionYield, createRandom } = await import(mainUrl);
 const { CONTROL_IDS } = await import(`${dist}/adapters/dom-controls.js`);
+const { productionWalkUrl } = await import(`${dist}/adapters/walk-url.js`);
 
 /** A recording fake 2D context: records the draw ops the harness asserts on; everything else no-ops. */
 function makeFakeCtx() {
@@ -203,17 +204,19 @@ function ok(label) {
 {
   const a = createRandom();
   const b = createRandom();
-  assert.notEqual(a, b, "createRandom() returns a fresh instance each call (not a shared/cached source)");
+  assert.notEqual(a.source, b.source, "createRandom() returns a fresh source each call (not a shared/cached one)");
+  assert.ok(Number.isInteger(a.seed) && Number.isInteger(b.seed), "createRandom() REPORTS an integer seed (US-022 — reflected to the URL)");
 
   // Sample a short prefix of each stream up front so we can both (i) prove entropy-seeding — two
   // independent streams, not a fixed seed — and (ii) range-check the drawn floats.
   const sample = (r) => Array.from({ length: 4 }, () => r.nextFloat());
-  const streamA = sample(a);
-  const streamB = sample(b);
+  const streamA = sample(a.source);
+  const streamB = sample(b.source);
 
-  // AC1 "entropy-seeded by default": independent entropy seeds yield different streams. A regression to a
-  // FIXED seed would make both prefixes identical — caught here. (Collision on 4 consecutive 32-bit draws
-  // is ~2^-128, so this is not flaky.)
+  // AC1 "entropy-seeded by default": independent entropy seeds yield different seeds AND streams. A
+  // regression to a FIXED seed would make both identical — caught here. (Collision on a 32-bit seed /
+  // 4 consecutive 32-bit draws is ~2^-32 / ~2^-128, so this is not flaky.)
+  assert.notEqual(a.seed, b.seed, "createRandom() is ENTROPY-seeded — two calls choose different seeds, not a fixed one");
   assert.notDeepEqual(
     streamA,
     streamB,
@@ -225,11 +228,89 @@ function ok(label) {
       assert.ok(f >= 0 && f < 1, `${label} source nextFloat() is in [0, 1)`);
     }
   }
-  for (const [label, r] of [["first", a], ["second", b]]) {
-    const n = r.nextInt(60, 140);
+  for (const [label, s] of [["first", a], ["second", b]]) {
+    const n = s.source.nextInt(60, 140);
     assert.ok(Number.isInteger(n) && n >= 60 && n <= 140, `${label} source nextInt(60,140) is an int in range`);
   }
-  ok("createRandom(): a fresh, ENTROPY-seeded, functional RandomSource per call (distinct streams, not a fixed seed)");
+  ok("createRandom(): a fresh, ENTROPY-seeded, functional source per call that REPORTS its seed (US-022)");
+}
+
+// ── US-022 AC3: createRandom(seed) REPRODUCES a seed's stream and reports the canonical seed ──
+// This is the basis of `?seed=` reproducibility: given the seed from a shared URL, the factory rebuilds
+// the exact same stream, so the same walk is regenerated. Two calls with the same seed must be identical.
+{
+  const seed = 0x12345678; // 305419896
+  const a = createRandom(seed);
+  const b = createRandom(seed);
+  assert.equal(a.seed, seed, "createRandom(seed) reports the seed it used");
+  assert.equal(b.seed, seed, "...for both calls");
+  const sample = (r) => Array.from({ length: 8 }, () => r.nextFloat());
+  assert.deepEqual(
+    sample(a.source),
+    sample(b.source),
+    "createRandom(seed) reproduces the SAME stream for the same seed (US-022 determinism)"
+  );
+  ok("createRandom(seed): reproduces a seed's stream and reports the canonical seed (US-022 AC3)");
+}
+
+// ── US-022 AC: productionWalkUrl reads ?seed=/?count= and reflects via history.replaceState ──
+// The live URL gateway touches window.location + history; stub them to drive read/reflect headlessly.
+// (In the bootstrap checks below, window is ABSENT, so the gateway is a safe no-op by design — see
+// walk-url.ts — which is why those checks see the unchanged entropy behaviour.)
+{
+  let replaced = null;
+  globalThis.window = {
+    location: { search: "?seed=42&count=30&keep=1", pathname: "/app", hash: "#frag" },
+    history: {
+      replaceState: (_state, _title, url) => {
+        replaced = url;
+      },
+    },
+  };
+  try {
+    assert.deepEqual(productionWalkUrl.read(), { seed: 42, count: 30 }, "read() parses ?seed= and ?count= as integers");
+
+    productionWalkUrl.reflect({ seed: 4242, count: 90 });
+    assert.ok(replaced !== null, "reflect() calls history.replaceState (updates the URL WITHOUT reloading)");
+    const out = new URL(`http://x${replaced}`);
+    assert.equal(out.pathname, "/app", "reflect() preserves the path");
+    assert.equal(out.hash, "#frag", "reflect() preserves the hash");
+    assert.equal(out.searchParams.get("seed"), "4242", "reflect() writes the new seed");
+    assert.equal(out.searchParams.get("count"), "90", "reflect() writes the new count");
+    assert.equal(out.searchParams.get("keep"), "1", "reflect() preserves other query params");
+
+    // Round-trip: reading the reflected URL back yields exactly the reflected seed + count (AC3).
+    globalThis.window.location.search = out.search;
+    assert.deepEqual(
+      productionWalkUrl.read(),
+      { seed: 4242, count: 90 },
+      "the reflected URL reads back as the same seed + count (round-trip)"
+    );
+  } finally {
+    globalThis.window = undefined;
+  }
+  ok("productionWalkUrl: reads ?seed=/?count=, reflects via replaceState (preserving path/hash/params), round-trips (US-022)");
+}
+
+// ── US-022: blank/non-numeric params and the no-window (Node) path both read as "no params" ──
+// So with no — or an invalid — ?seed=, behaviour is unchanged (a fresh entropy walk), and importing /
+// driving the module in Node never touches `window`.
+{
+  globalThis.window = {
+    location: { search: "?seed=&count=abc", pathname: "/", hash: "" },
+    history: { replaceState() {} },
+  };
+  try {
+    assert.deepEqual(
+      productionWalkUrl.read(),
+      { seed: null, count: null },
+      "blank/non-numeric params read as null (entropy default, behaviour unchanged)"
+    );
+  } finally {
+    globalThis.window = undefined;
+  }
+  assert.deepEqual(productionWalkUrl.read(), { seed: null, count: null }, "with no window (Node), read() reports no params");
+  ok("productionWalkUrl: invalid/missing params and the Node no-window path both read as 'no params'");
 }
 
 // ── AC2 (the headline): bootstrap wires the real adapters + use cases and auto-generates on load ──
@@ -305,6 +386,37 @@ function ok(label) {
   await withTimeout(controls.generate(), 5000, "second generate via the returned controls");
   assert.ok(ctx.countOf("arc") >= 90, "a fresh Generate via the returned controls draws a new walk");
   ok("bootstrap returns LIVE controls wired to the real renderer + use cases (Clear empties, Generate redraws)");
+}
+
+// ── US-022 (AC2/AC4): bootstrap wires productionWalkUrl, so the auto-generated walk's seed + count
+//     are reflected into the URL on load ──
+// The checks above run with NO window, so the URL gateway is a no-op and never observed. Here we stub
+// window.location + history (empty search → entropy walk, count 90 from the default input) and assert
+// that bootstrap's auto-generate reflected a shareable ?seed=&count= URL via history.replaceState —
+// proving the composition root actually wires productionWalkUrl into DomControls, not a no-op double.
+{
+  const { ctx, doc } = makeFakeDoc();
+  let reflectedUrl = null;
+  globalThis.window = {
+    location: { search: "", pathname: "/", hash: "" },
+    history: {
+      replaceState: (_state, _title, url) => {
+        reflectedUrl = url;
+      },
+    },
+  };
+  try {
+    const { autoGenerated } = bootstrap(doc);
+    await withTimeout(autoGenerated, 5000, "auto-generate with URL reflection (US-022)");
+    assert.ok(ctx.countOf("arc") >= 90, "the auto-generated walk drew (sanity)");
+    assert.ok(reflectedUrl !== null, "bootstrap's auto-generate reflected the URL (productionWalkUrl is wired, not a no-op)");
+    const params = new URL(`http://x${reflectedUrl}`).searchParams;
+    assert.ok(/^\d+$/.test(params.get("seed") ?? ""), "reflected URL carries a numeric seed");
+    assert.equal(params.get("count"), "90", "reflected URL carries the auto-generate count (90)");
+  } finally {
+    globalThis.window = undefined;
+  }
+  ok("US-022 (AC2): bootstrap reflects the auto-generated walk's seed + count to the URL (productionWalkUrl wired)");
 }
 
 // ── Robustness: bootstrap fails loudly when the canvas element is missing ──

@@ -105,9 +105,25 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   options)`; a fresh Generate replaces it; Clear nulls it (so toggles become a no-op until the next
   Generate). Do NOT push this state into the domain.
 - **Seed-agnostic**: a fresh `RandomSource` is produced per generation via the injected
-  `createRandom: () => RandomSource` factory (NOT a single shared instance — each Generate must start a
-  fresh deterministic stream, which US-022's single-seed reproducibility depends on). US-021 supplies
-  the entropy-seeded factory; US-022 layers `?seed=` on top — neither changes this class.
+  `createRandom: RandomFactory` (`(seed?) => { source, seed }`) — NOT a single shared instance, since
+  each Generate must start a fresh deterministic stream, which single-seed reproducibility depends on.
+  The factory mints an entropy stream by default and REPORTS the seed it used; given a seed it
+  reproduces that exact stream. US-021 supplies the production factory; US-022 (below) layers the
+  `?seed=` URL read/reflect on top.
+- **Shareable `?seed=` URLs (US-022)**: `DomControls` reproduces and shares walks via two injected
+  collaborators — the `RandomFactory` above and a `WalkUrl` gateway (`src/adapters/walk-url.ts`). On
+  construction it reads `?seed=`/`?count=` once (`applyUrlParams`): the count pre-fills the waypoint
+  input, and the seed is stashed in `pendingUrlSeed`. `generate()` consumes that override via
+  `takeSeedOverride()` (ONE-SHOT — the URL seed seeds only the FIRST generation, so a shared link
+  reproduces its walk, after which every Generate mints a fresh entropy seed), passes it to
+  `createRandom`, and on SUCCESS calls `walkUrl.reflect({ seed, count })` to update the address bar
+  (the seed is the canonical value; the count is the ACTUAL clamped count used, not the raw input). A
+  failed (ok:false) generation reflects nothing. The domain stays seed/URL-agnostic; all URL access is
+  in `WalkUrl`. `verify:controls` covers it (reflect-on-success with the actual count; no-reflect on
+  failure; one-shot `?seed=`; `?count=` pre-fill; and an end-to-end AC3 round-trip where a second
+  `DomControls` reading the reflected params reproduces load 1's walk, made non-vacuous by giving load
+  2 a DIFFERENT fresh-seed default so ignoring the URL seed would diverge). Proven to bite (drop
+  `reflect()`; make `takeSeedOverride` ignore the override) then reverted.
 - **Count clamping**: `readCount()` parses the input and clamps to `[10, 90]`, falling back to 90 on a
   blank/non-numeric value, so the generator always gets a valid integer count (its guard rejects
   non-integer / `< 2`). The `<input min="10" max="90" value="90">` attributes mirror these bounds.
@@ -231,6 +247,25 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   `DomControls` constructed) only become interactive once US-021 wires main.ts (composition root +
   auto-generate-on-load). The headless harnesses stand in for the functional ACs; the screenshot is a
   review gate, not a code defect.
+
+## walk-url.ts (US-022)
+- The ONLY place that touches the browser URL / history (the domain + ports stay seed/URL-agnostic —
+  US-022 AC4). `WalkUrl` is the interface `DomControls` depends on (`read()` → `{ seed, count }` with
+  each `null` if absent/unparseable; `reflect({ seed, count })` writes the URL without reloading), so
+  the adapter is unit-testable with an in-memory fake. `productionWalkUrl` is the live impl backed by
+  `window.location` + `history.replaceState` (REPLACE not push, so a run of Generates doesn't flood the
+  back button; it preserves the path, OTHER query params, and the hash).
+- **Guarded by `typeof window`**: both methods no-op when `window` is absent (`read()` → no params /
+  entropy default, `reflect()` → nothing), so importing the module or driving `bootstrap` in Node (the
+  headless gates) is side-effect-free — same idea as main.ts's `typeof document` auto-run guard. This is
+  why the `verify:main` bootstrap checks (no window) see the unchanged entropy behaviour; the URL
+  read/reflect is tested separately by stubbing `globalThis.window` with `location`+`history`.
+- **Reproducibility is a DOMAIN guarantee** surfaced here: `SeededRandom.seed` (domain) exposes the
+  canonical uint32 seed (captured at construction, fixed as the stream advances), and `createRandom`
+  reports it; `walk-url` just round-trips that number through the address bar. The dedicated
+  `tests/seed-reproducibility.test.ts` (a `node:test`, so it imports only the domain) pins AC5: same
+  seed + count → byte-identical Walk (waypoints/turns/segment-lengths/wildcards). `verify:main` covers
+  `productionWalkUrl` (parse, reflect-preserving-path/hash/params, round-trip, invalid→null, no-window).
 
 ## canvas-renderer.ts (US-013+)
 - Implements the `Renderer` port (`src/application/renderer-port.ts`): `draw(walk, options)` + `clear()`.

@@ -119,17 +119,50 @@ function makeElements() {
   };
 }
 
+/**
+ * A random factory matching the production shape (US-022): `(seed?) => { source, seed }`. Given a
+ * seed it reproduces it; given nothing it mints the fixed test seed. `source.seed` is read off the
+ * real SeededRandom, so the seed the harness asserts on is the canonical uint32 the PRNG actually used.
+ */
+function makeRandomFactory(seed = SEED) {
+  return (s) => {
+    const source = new SeededRandom(s ?? seed);
+    return { source, seed: source.seed };
+  };
+}
+
+/**
+ * An in-memory {@link WalkUrl} double (US-022): `read()` returns the (mutable) `params` the test set;
+ * `reflect()` records each `{ seed, count }` into `reflected`, so the harness can assert the URL the
+ * adapter would have written without touching `window` / `history`.
+ */
+function fakeWalkUrl(params = { seed: null, count: null }) {
+  return {
+    params,
+    reflected: [],
+    read() {
+      return this.params;
+    },
+    reflect(p) {
+      this.reflected.push(p);
+    },
+  };
+}
+
 /** A real-ish dependency set built around a fresh recording renderer + a seeded source factory. */
 function makeDeps(yieldPort = { yieldToEventLoop: () => Promise.resolve() }, seed = SEED) {
   const renderer = makeFakeRenderer();
+  const walkUrl = fakeWalkUrl();
   return {
     deps: {
       generateWalk: new GenerateWalk(yieldPort),
       clearWalk: new ClearWalk(renderer),
       renderer,
-      createRandom: () => new SeededRandom(seed),
+      createRandom: makeRandomFactory(seed),
+      walkUrl,
     },
     renderer,
+    walkUrl,
   };
 }
 
@@ -322,7 +355,8 @@ function ok(label) {
     generateWalk: { execute: async () => ({ ok: false, reason: "exhausted", attempts: 9, rerolls: 2 }) },
     clearWalk: new ClearWalk(renderer),
     renderer,
-    createRandom: () => new SeededRandom(SEED),
+    createRandom: makeRandomFactory(),
+    walkUrl: fakeWalkUrl(),
   };
   const els = makeElements();
   const controls = new DomControls(deps, els);
@@ -349,7 +383,8 @@ function ok(label) {
     },
     clearWalk: new ClearWalk(renderer),
     renderer,
-    createRandom: () => new SeededRandom(SEED),
+    createRandom: makeRandomFactory(),
+    walkUrl: fakeWalkUrl(),
   };
   const els = makeElements();
   const controls = new DomControls(deps, els);
@@ -372,7 +407,8 @@ function ok(label) {
     generateWalk: { execute: async () => ({ ok: false, reason: "exhausted", attempts: 9, rerolls: 2 }) },
     clearWalk: new ClearWalk(renderer),
     renderer,
-    createRandom: () => new SeededRandom(SEED),
+    createRandom: makeRandomFactory(),
+    walkUrl: fakeWalkUrl(),
   };
   const els = makeElements();
   const controls = new DomControls(deps, els);
@@ -403,7 +439,8 @@ function ok(label) {
     },
     clearWalk: new ClearWalk(renderer),
     renderer,
-    createRandom: () => new SeededRandom(SEED),
+    createRandom: makeRandomFactory(),
+    walkUrl: fakeWalkUrl(),
   };
   const els = makeElements();
   els.waypointInput.value = "10"; // count=10: the proven exhausting case (nothing fits a 100×100 region)
@@ -440,7 +477,8 @@ function ok(label) {
     },
     clearWalk: new ClearWalk(renderer),
     renderer,
-    createRandom: () => new SeededRandom(SEED),
+    createRandom: makeRandomFactory(),
+    walkUrl: fakeWalkUrl(),
   };
   const els = makeElements();
   const controls = new DomControls(deps, els);
@@ -471,7 +509,8 @@ function ok(label) {
     generateWalk: stubGenerate,
     clearWalk: new ClearWalk(renderer),
     renderer,
-    createRandom: () => new SeededRandom(SEED),
+    createRandom: makeRandomFactory(),
+    walkUrl: fakeWalkUrl(),
   };
   const els = makeElements();
   const controls = new DomControls(deps, els);
@@ -537,7 +576,8 @@ function ok(label) {
       },
     },
     renderer,
-    createRandom: () => new SeededRandom(SEED),
+    createRandom: makeRandomFactory(),
+    walkUrl: fakeWalkUrl(),
   };
   const els = makeElements();
   const controls = new DomControls(deps, els);
@@ -559,10 +599,12 @@ function ok(label) {
     generateWalk: new GenerateWalk({ yieldToEventLoop: () => Promise.resolve() }),
     clearWalk: new ClearWalk(renderer),
     renderer,
-    createRandom: () => {
+    createRandom: (s) => {
       randomsCreated++;
-      return new SeededRandom(SEED);
+      const source = new SeededRandom(s ?? SEED);
+      return { source, seed: source.seed };
     },
+    walkUrl: fakeWalkUrl(),
   };
   const els = makeElements();
   const controls = new DomControls(deps, els);
@@ -578,6 +620,116 @@ function ok(label) {
     "both generations produced a walk"
   );
   ok("Each Generate pulls a fresh RandomSource from createRandom (no shared/cached source)");
+}
+
+// ── US-022 (AC2): a successful Generate reflects the seed + ACTUAL count that produced the walk ──
+// The address bar must become a shareable link after every Generate. The reflected seed is the
+// canonical value the factory reported, and the count is the one actually USED (clamped), not the raw
+// input — so reopening the link reproduces the exact walk.
+{
+  const { deps, renderer, walkUrl } = makeDeps(undefined, 4242);
+  const els = makeElements();
+  els.waypointInput.value = "999"; // clamps to 90 — the reflected count must be the count USED
+  const controls = new DomControls(deps, els);
+
+  await controls.generate();
+  assert.equal(walkUrl.reflected.length, 1, "a successful Generate reflects the URL exactly once");
+  const drawn = renderer.drawsOf()[0].walk;
+  assert.deepEqual(
+    walkUrl.reflected[0],
+    { seed: 4242, count: drawn.waypointCount },
+    "reflected URL carries the canonical seed + the actual waypoint count"
+  );
+  assert.equal(walkUrl.reflected[0].count, 90, "the clamped count (999 → 90), not the raw input, is reflected");
+  ok("US-022 (AC2): a successful Generate reflects the seed + actual count to the URL");
+}
+
+// ── US-022: a failed (exhausted-re-roll) generation reflects NOTHING — there is no walk to share ──
+{
+  const renderer = makeFakeRenderer();
+  const walkUrl = fakeWalkUrl();
+  const deps = {
+    generateWalk: { execute: async () => ({ ok: false, reason: "exhausted", attempts: 9, rerolls: 2 }) },
+    clearWalk: new ClearWalk(renderer),
+    renderer,
+    createRandom: makeRandomFactory(),
+    walkUrl,
+  };
+  const els = makeElements();
+  const controls = new DomControls(deps, els);
+
+  await controls.generate();
+  assert.equal(walkUrl.reflected.length, 0, "a failed generation does not write the URL (no walk to reproduce)");
+  ok("US-022: a failed generation reflects nothing to the URL");
+}
+
+// ── US-022 (AC1): a ?seed= URL seeds ONLY the first generation, then is consumed (fresh seed after) ──
+{
+  const { deps, walkUrl } = makeDeps(undefined, 4242);
+  walkUrl.params = { seed: 13579, count: null }; // simulate ?seed=13579 on load
+  const els = makeElements();
+  const controls = new DomControls(deps, els); // reads the URL in its constructor
+
+  await controls.generate();
+  assert.equal(walkUrl.reflected[0].seed, 13579, "the first generation uses the ?seed= URL value (AC1)");
+  await controls.generate();
+  assert.notEqual(walkUrl.reflected[1].seed, 13579, "a second Generate mints a fresh seed (the URL seed is one-shot)");
+  assert.equal(walkUrl.reflected[1].seed, 4242, "...the factory's fresh seed, not the consumed URL seed");
+  ok("US-022 (AC1): the ?seed= URL seeds only the first generation, then a fresh seed is used");
+}
+
+// ── US-022 (AC1): a ?count= URL pre-fills the waypoint input and is used for the first generation ──
+{
+  const { deps, renderer, walkUrl } = makeDeps(undefined, 4242);
+  walkUrl.params = { seed: null, count: 25 };
+  const els = makeElements(); // default value "90"
+  const controls = new DomControls(deps, els);
+  assert.equal(els.waypointInput.value, "25", "?count= pre-fills the waypoint input on load");
+
+  await controls.generate();
+  assert.equal(renderer.drawsOf()[0].walk.waypointCount, 25, "the first generation uses the URL count");
+  assert.equal(walkUrl.reflected[0].count, 25, "the reflected URL carries that count");
+  ok("US-022 (AC1): a ?count= URL pre-fills the input and is used for the first generation");
+}
+
+// ── US-022 (AC3) end-to-end: opening the reflected ?seed=&count= URL reproduces the SAME walk ──
+// Load 1 (no URL params) generates with one seed and reflects { seed, count }. Load 2 reads back those
+// exact params and must reproduce the identical walk — through the REAL GenerateWalk + domain. The
+// check is non-vacuous: load 2's factory has a DIFFERENT fresh-seed default, so if the adapter ignored
+// the URL seed it would draw a different walk and the fingerprints would diverge.
+{
+  const fingerprint = (walk) =>
+    JSON.stringify(
+      walk.waypoints.map((w) => [w.sequenceNumber, w.position.x, w.position.y, w.outboundTurn, w.wildcard])
+    );
+
+  // Load 1: no URL params → mints seed 11111 (the factory default), reflects { seed: 11111, count: 40 }.
+  const load1 = makeDeps(undefined, 11111);
+  const els1 = makeElements();
+  els1.waypointInput.value = "40";
+  const controls1 = new DomControls(load1.deps, els1);
+  await controls1.generate();
+  const shared = load1.walkUrl.reflected[0];
+  const walk1 = load1.renderer.drawsOf()[0].walk;
+  assert.equal(shared.seed, 11111, "load 1 reflected its minted seed");
+  assert.equal(shared.count, 40, "load 1 reflected its count");
+
+  // Load 2: read back the reflected params; its fresh-seed default is DIFFERENT (99999), so honouring
+  // the URL seed is the only way it reproduces load 1's walk.
+  const load2 = makeDeps(undefined, 99999);
+  load2.walkUrl.params = { seed: shared.seed, count: shared.count };
+  const els2 = makeElements();
+  const controls2 = new DomControls(load2.deps, els2);
+  assert.equal(els2.waypointInput.value, String(shared.count), "load 2 picked up the shared count");
+  await controls2.generate();
+  const walk2 = load2.renderer.drawsOf()[0].walk;
+
+  assert.equal(
+    fingerprint(walk1),
+    fingerprint(walk2),
+    "opening the reflected ?seed=&count= URL reproduces the identical walk (AC3)"
+  );
+  ok("US-022 (AC3): opening the reflected URL reproduces the same waypoints/turns/wildcards end-to-end");
 }
 
 // ── AC: the LIVE index.html markup matches the adapter contract (the one un-faked seam) ──

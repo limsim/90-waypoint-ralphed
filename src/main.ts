@@ -4,24 +4,26 @@
 // chooses the production driven ports. The hexagon's two real boundaries — randomness and rendering —
 // plus the cooperative-yield boundary are all injected here:
 //
-//   • RandomSource — an entropy-seeded SeededRandom, produced FRESH per generation via a factory so
-//     each Generate starts an independent deterministic stream. US-022 layers the `?seed=` URL
-//     override on top of this default without touching the adapter or the core.
+//   • RandomSource — an entropy-seeded SeededRandom, produced FRESH per generation via a factory that
+//     also REPORTS the seed it used (see {@link createRandom}). The factory accepts an optional seed so
+//     the DomControls adapter can reproduce a `?seed=` URL on load (US-022); the core stays seed-agnostic.
 //   • Renderer     — the Canvas 2D CanvasRenderer, bound to the page's <canvas>.
 //   • Yield        — a MACROTASK yield (see {@link productionYield}) so the browser can paint the
 //     loading overlay and animate its CSS spinner between the generator's synchronous placement batches.
+//   • WalkUrl      — the shareable-URL gateway ({@link productionWalkUrl}, US-022): reads `?seed=`/
+//     `?count=` on load and reflects the current walk's seed + count back, the only URL boundary.
 //
 // On load it auto-generates a walk so the canvas is never blank (US-021 AC2). The wiring is exposed as
 // {@link bootstrap} (plus the port + factory it injects) so the headless gate
 // (scripts/verify-main.mjs) can drive the same composition with fakes; the auto-run at the bottom is
 // guarded by a `typeof document` check so importing this module in Node has no side effects.
-import { RandomSource } from "./domain/random-source.js";
 import { SeededRandom } from "./domain/seeded-random.js";
 import { GenerateWalk } from "./application/generate-walk.js";
 import { ClearWalk } from "./application/clear-walk.js";
 import { Yield } from "./application/yield-port.js";
 import { CanvasRenderer } from "./adapters/canvas-renderer.js";
-import { CONTROL_IDS, DomControls } from "./adapters/dom-controls.js";
+import { CONTROL_IDS, DomControls, SeededSource } from "./adapters/dom-controls.js";
+import { productionWalkUrl } from "./adapters/walk-url.js";
 
 /**
  * Production {@link Yield} port.
@@ -42,15 +44,19 @@ export const productionYield: Yield = {
 };
 
 /**
- * Production {@link RandomSource} factory: a fresh, entropy-seeded {@link SeededRandom} per call.
+ * Production random factory ({@link RandomFactory}): a fresh {@link SeededRandom} per call, paired with
+ * the canonical seed that produced it.
  *
  * It is a FACTORY (not a single shared instance) because each Generate must start an independent
  * deterministic stream — a shared mutable source would make walk N depend on every prior draw, breaking
- * US-022's single-seed reproducibility. `new SeededRandom()` with no argument seeds from entropy;
- * US-022 layers the `?seed=` override on top.
+ * US-022's single-seed reproducibility. Given a `seed` (from a `?seed=` URL) it reproduces that exact
+ * stream; with no argument `new SeededRandom()` seeds from entropy. Either way it reports
+ * `source.seed` — the canonical 32-bit seed — so {@link DomControls} can reflect it into the URL,
+ * making the current walk shareable and revisitable (US-022).
  */
-export function createRandom(): RandomSource {
-  return new SeededRandom();
+export function createRandom(seed?: number): SeededSource {
+  const source = new SeededRandom(seed);
+  return { source, seed: source.seed };
 }
 
 /** What {@link bootstrap} hands back: the wired controls and the first (auto-generate-on-load) walk. */
@@ -88,7 +94,7 @@ export function bootstrap(doc: Document = document): Bootstrapped {
   const generateWalk = new GenerateWalk(productionYield);
   const clearWalk = new ClearWalk(renderer);
   const controls = DomControls.fromDocument(
-    { generateWalk, clearWalk, renderer, createRandom },
+    { generateWalk, clearWalk, renderer, createRandom, walkUrl: productionWalkUrl },
     doc
   );
 

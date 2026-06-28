@@ -132,6 +132,39 @@ test("non-integer seed is truncated to 32-bit integer (>>> 0)", () => {
   }
 });
 
+test("seed is recoverable and stays fixed as the stream advances (US-022 shareable seed)", () => {
+  // US-022 reflects the seed that produced a walk into a ?seed= URL, so the seed must be readable
+  // off the source AND must not drift as numbers are drawn (the PRNG state advances; the seed does not).
+  const rng = new SeededRandom(2026);
+  assert.equal(rng.seed, 2026, "seed is recoverable immediately after construction");
+  for (let i = 0; i < 50; i++) rng.nextFloat();
+  assert.equal(rng.seed, 2026, "seed is unchanged after the stream has advanced");
+});
+
+test("seed is canonicalised to a uint32 (>>> 0), so the reflected URL value round-trips", () => {
+  // The composition root reflects source.seed into the URL; URLSearchParams round-trips it as a
+  // base-10 string, so the canonical value must be a non-negative 32-bit integer.
+  assert.equal(new SeededRandom(42).seed, 42, "an in-range seed is reported unchanged");
+  assert.equal(new SeededRandom(42.9).seed, 42, "a float seed is truncated to its 32-bit integer");
+  assert.equal(new SeededRandom(-1).seed, 0xffffffff, "a negative seed wraps to its uint32");
+  // Two seeds 2^32 apart map to the same canonical seed AND the same stream.
+  const a = new SeededRandom(7);
+  const b = new SeededRandom(7 + 2 ** 32);
+  assert.equal(a.seed, b.seed, "seeds 2^32 apart share a canonical seed");
+  assert.equal(a.nextFloat(), b.nextFloat(), "...and therefore the same stream");
+});
+
+test("entropy-seeded instance still reports a recoverable uint32 seed", () => {
+  const rng = new SeededRandom();
+  assert.ok(Number.isInteger(rng.seed) && rng.seed >= 0 && rng.seed <= 0xffffffff, "entropy seed is a uint32");
+  // A second SeededRandom built from the recovered seed reproduces the entropy stream exactly —
+  // this is exactly how a shared ?seed= URL reproduces an originally-entropy-seeded walk (US-022).
+  const replay = new SeededRandom(rng.seed);
+  for (let i = 0; i < 20; i++) {
+    assert.equal(replay.nextFloat(), rng.nextFloat());
+  }
+});
+
 test("nextInt distributes roughly uniformly across [0, 4]", () => {
   const rng = new SeededRandom(777);
   const buckets = [0, 0, 0, 0, 0];

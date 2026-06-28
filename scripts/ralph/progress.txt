@@ -464,6 +464,37 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   clause. NB the obvious regression (inverting to `typeof document === "undefined"`) is caught EARLIER by
   TYPECHECK (document narrows to `never`); to prove the RUNTIME gate bites use a compiling regression
   (drop the else-branch bootstrap(); or make the loading branch bootstrap immediately).
+- Shareable `?seed=` URLs (US-022) are layered on the EXISTING seed plumbing without touching the
+  domain/ports: (1) `SeededRandom` gained a `readonly seed` (the canonical uint32, captured at
+  construction so it stays fixed as the PRNG `state` advances) — the seed that produced a walk is now
+  RECOVERABLE; (2) the `createRandom` factory changed from `() => RandomSource` to
+  `(seed?) => { source, seed }` (a `RandomFactory`/`SeededSource` in dom-controls.ts) — entropy by
+  default, reproduces a given seed, and REPORTS the seed so the adapter can reflect it; (3) a new
+  `WalkUrl` gateway (`src/adapters/walk-url.ts`, `productionWalkUrl`) is the ONLY URL boundary
+  (read `?seed=`/`?count=`, reflect via `history.replaceState`). The domain stays seed/URL-agnostic
+  (AC4) — `RandomSource` the PORT has no `seed`; only the concrete `SeededRandom` does, surfaced via
+  the factory's `SeededSource.seed`. Don't push seed/URL into the domain or the application ports.
+- The `?seed=` POLICY lives in `DomControls` (it owns the generate lifecycle + the count input), split
+  cleanly from MECHANISM: randomness/entropy is `createRandom` (composition root), URL I/O is `WalkUrl`
+  (gateway), and "use the URL seed once then entropy" is `pendingUrlSeed` + `takeSeedOverride()` (ONE-
+  SHOT: read in the constructor's `applyUrlParams`, consumed on the first generate). `generate()`
+  reflects `{ seed, count }` to the URL only on SUCCESS, with the ACTUAL clamped count (`readCount()`),
+  not the raw input. A `?count=` pre-fills the input on load; `readCount` then clamps it like any value.
+- `productionWalkUrl` MUST guard `typeof window` (no-op when absent), exactly like main.ts's
+  `typeof document` auto-run guard — otherwise `bootstrap` (which wires `productionWalkUrl`) throws in
+  Node and breaks `verify:main`. With the guard, the existing `verify:main` bootstrap checks (no window)
+  keep seeing the unchanged entropy behaviour, and the URL read/reflect is tested by stubbing
+  `globalThis.window` with `{ location, history }` (reset to `undefined` in a `finally`, same pattern as
+  the `globalThis.document` auto-run stubs). Round-trip a reflected URL by parsing `new URL(\`http://x${url}\`)`.
+- AC5 reproducibility test (`tests/seed-reproducibility.test.ts`) is DOMAIN-level (a `node:test` can
+  only import core, not the DOM-bound adapter/URL code): drive `walkGenerator.generate(count, new
+  SeededRandom(seed))` twice and `deepEqual` a fingerprint (waypoint x/y/turn/wildcard + segment
+  lengths + cumulative distances). The adapter/URL round-trip is proven separately in verify:controls
+  (end-to-end through two `DomControls`) and verify:main (`productionWalkUrl` + bootstrap reflection).
+  Make the round-trip non-vacuous by giving the "reload" a DIFFERENT entropy default so ignoring the
+  URL seed would diverge. When changing `createRandom`'s shape, every `deps` literal in
+  verify-controls.mjs needs the new factory + a `walkUrl` (a `perl -0pi` replace of the identical
+  `createRandom: () => new SeededRandom(SEED),` line handles the uniform ones in one pass).
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -2278,4 +2309,58 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     direct calls for wiring, a stubbed-global re-import for the load-time invocation + readyState branch.
   - When proving a guard regression "bites", check whether TYPECHECK catches it first (control-flow
     narrowing often does); if so, use a different, COMPILING regression to exercise the runtime gate.
+---
+
+## 2026-06-28 - US-022 (Shareable reproducible walks via ?seed= URL)
+- Implemented the full `?seed=`/`?count=` shareable-URL feature on top of the existing seed plumbing,
+  with the domain left entirely seed/URL-agnostic (AC4).
+- What was implemented:
+  - `src/domain/seeded-random.ts`: added `readonly seed` — the canonical uint32 the stream was built
+    from (captured once at construction, so it stays fixed as the mutable PRNG `state` advances). Makes
+    the seed that produced a walk RECOVERABLE (AC3). The `RandomSource` PORT is untouched (stays
+    seed-agnostic); only the concrete PRNG exposes its seed.
+  - `src/adapters/walk-url.ts` (NEW): `WalkUrl` interface (`read() -> {seed,count}`, `reflect({seed,
+    count})`) + `productionWalkUrl` impl backed by `window.location` + `history.replaceState` (replace,
+    not push; preserves path/other-params/hash). The ONLY URL boundary (AC4). Guarded by `typeof window`
+    so it's a safe no-op in Node (keeps `bootstrap`/imports side-effect-free for the gates).
+  - `src/adapters/dom-controls.ts`: `createRandom` dep changed to a `RandomFactory`
+    (`(seed?) => SeededSource = {source, seed}`); added a `walkUrl: WalkUrl` dep. Constructor reads the
+    URL once (`applyUrlParams`): `?count=` pre-fills the waypoint input, `?seed=` is stashed in
+    `pendingUrlSeed`. `generate()` consumes the override via `takeSeedOverride()` (ONE-SHOT — URL seed
+    seeds only the first generation, then fresh entropy), and on SUCCESS reflects `{seed, count}` to the
+    URL (canonical seed + the ACTUAL clamped count). Failure reflects nothing.
+  - `src/main.ts`: `createRandom(seed?)` now returns `{source, seed}` (entropy default reports its seed;
+    a given seed reproduces it); wires `walkUrl: productionWalkUrl` into `DomControls`.
+  - `tests/seed-reproducibility.test.ts` (NEW, AC5): domain-level determinism — same seed+count yields a
+    byte-identical Walk (waypoints/turns/segment-lengths/wildcards), the whole result object is
+    deterministic, different seeds differ, a seed parsed from a `?seed=` string reproduces, an entropy
+    walk's recovered seed reproduces it, and seed+2^32 canonicalises to the same walk.
+  - `tests/seeded-random.test.ts`: +3 tests for the new `seed` getter (recoverable, fixed across draws,
+    uint32-canonical, entropy seed replayable).
+  - `scripts/verify-controls.mjs`: every `deps` literal updated to the new factory shape + a fake
+    `WalkUrl`; +5 US-022 checks (reflect-on-success with actual count; no-reflect on failure; one-shot
+    `?seed=`; `?count=` pre-fill; end-to-end AC3 round-trip through two `DomControls`). 28 -> 33 checks.
+  - `scripts/verify-main.mjs`: updated the `createRandom` block to the `{source, seed}` shape (+assert
+    distinct entropy seeds); +4 checks (`createRandom(seed)` reproduces+reports; `productionWalkUrl`
+    read/reflect/round-trip; invalid/no-window -> null; bootstrap reflects the auto-walk's seed+count via
+    a stubbed window, proving `productionWalkUrl` is wired). 8 -> 12 checks.
+- Files changed: src/domain/seeded-random.ts, src/adapters/walk-url.ts (new), src/adapters/dom-controls.ts,
+  src/main.ts, tests/seed-reproducibility.test.ts (new), tests/seeded-random.test.ts,
+  scripts/verify-controls.mjs, scripts/verify-main.mjs, CLAUDE.md, src/adapters/CLAUDE.md.
+- Verified: npm run clean + tsc -b clean; npm test -> 252 pass (was 243; +9); verify:renderer green;
+  verify:controls 33/33; verify:main 12/12. New gates PROVEN TO BITE then reverted (precise Edits, not
+  git checkout): drop `walkUrl.reflect()` -> verify:controls AC2 fails; make `takeSeedOverride` ignore
+  the override -> AC1 `?seed=` check fails; wire a no-op walkUrl into bootstrap -> verify:main reflection
+  check fails. `npm run clean` after each revert.
+- CAVEAT (carried from US-013..021): no browser/Playwright MCP in this env, so the LIVE screenshot
+  sign-off (two loads of the same `?seed=` URL look identical; the URL updating after a fresh Generate)
+  is still pending; the headless harnesses + the determinism node:test stand in for the functional ACs.
+- **Learnings for future iterations:**
+  - See the new Codebase Patterns bullets at the top: split seed POLICY (DomControls) from MECHANISM
+    (createRandom + WalkUrl); `productionWalkUrl` must guard `typeof window`; the AC5 test is
+    domain-level while the URL round-trip is proven in the verify harnesses; make round-trip checks
+    non-vacuous with a different "reload" entropy default.
+  - Changing `createRandom`'s shape ripples to BOTH verify harnesses and every inline `deps` literal —
+    a `perl -0pi` over the identical `createRandom: () => new SeededRandom(SEED),` line is the quickest
+    uniform fix; the makeDeps + counting-factory literals differ and need individual edits.
 ---

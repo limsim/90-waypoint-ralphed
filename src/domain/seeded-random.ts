@@ -8,8 +8,18 @@ import { RandomSource } from "./random-source.js";
 export class SeededRandom implements RandomSource {
   private state: number;
 
+  /**
+   * The canonical 32-bit seed this stream was constructed from (the supplied seed coerced with
+   * `>>> 0`, or an entropy-derived one when none was given). It is captured once at construction —
+   * the mutable PRNG `state` advances on every draw, but this stays fixed — so the seed that
+   * produced a walk is recoverable and can be reflected into a shareable `?seed=` URL (US-022).
+   * `RandomSource` itself stays seed-agnostic; only this concrete PRNG exposes its seed.
+   */
+  readonly seed: number;
+
   constructor(seed?: number) {
-    this.state = seed !== undefined ? seed >>> 0 : SeededRandom.entropy();
+    this.seed = seed !== undefined ? seed >>> 0 : SeededRandom.entropy();
+    this.state = this.seed;
   }
 
   /** Mix current time with Math.random for unpredictable production seeds. */
