@@ -44,7 +44,10 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   is ceded and the browser paints them; `setBusy(false)` runs in a `finally` so they are ALWAYS
   restored — on success, on the bounded failure signal (`ok:false`), and on a thrown error. `generate`
   rethrows; the click listener owns the rejection (`.catch(console.error)`) so a stray failure can't
-  become an unhandled promise rejection.
+  become an unhandled promise rejection. The WHOLE operation (the canvas clear → generate → draw) runs
+  INSIDE the `try` after `setBusy(true)`, so a failure in ANY step — including the clear — still hits
+  the `finally` and restores the controls; nothing between `setBusy(true)` and the `try` can strand the
+  busy state. `generate()` reuses `this.clear()` for that first step (no duplicated clear logic).
 - **Current-walk view state**: per ADR-0003 the domain holds no "current walk", but the two display
   toggles must redraw the SAME walk with new options WITHOUT regenerating it — so this adapter keeps a
   `currentWalk: Walk | null` (a pure UI/view concern). A toggle `change` → `renderer.draw(currentWalk,
@@ -63,9 +66,12 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   and asserts: clear-then-draw on Generate; overlay+disabled DURING (asserted synchronously, before the
   await) and restored after; Clear clears; toggles redraw the SAME walk object with independent options
   (and are a no-op with no current walk); the count input drives + clamps; Print calls `window.print`;
-  the overlay restores in `finally` on the `ok:false` failure signal AND on a thrown error; and
-  `fromDocument` resolves by id + throws on a missing element. **Extend it** when US-017 (tooltip/hover)
-  and US-020 (failure error overlay) add to this adapter. NOTE: `window.print` is a global — the harness
+  the overlay restores in `finally` on the `ok:false` failure signal, on a thrown generation, AND on a
+  thrown CLEAR step (proving the whole operation is inside the try, not just the post-clear part); each
+  Generate pulls a FRESH source from `createRandom` exactly once (no shared/cached source — the
+  seed-agnostic contract US-022 depends on); and `fromDocument` resolves by id + throws on a missing
+  element. **Extend it** when US-017 (tooltip/hover) and US-020 (failure error overlay) add to this
+  adapter. NOTE: `window.print` is a global — the harness
   stubs `globalThis.window` around the print check; the adapter reads `window` at call time.
 - **The one un-faked seam — index.html ↔ adapter contract.** Every behaviour check uses FAKE elements
   and a FAKE document, so a drift between `CONTROL_IDS` and the real ids in `index.html` (or a change to

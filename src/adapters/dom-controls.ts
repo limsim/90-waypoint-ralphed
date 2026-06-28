@@ -115,12 +115,16 @@ export class DomControls {
    * count. The Generate button is disabled and the loading overlay shown for the whole generation,
    * both restored in a `finally`. On the bounded generator's failure signal the canvas is left
    * cleared (US-020 renders the error message); the overlay/button are restored either way.
+   *
+   * Everything after `setBusy(true)` runs inside the `try`, so ANY failure — the clear, the
+   * generation, or the draw — still hits the `finally` and restores the controls; the busy state is
+   * never stranded. A fresh {@link RandomSource} is produced per call via `createRandom`, so each
+   * Generate starts an independent deterministic stream (US-022's single-seed reproducibility).
    */
   async generate(): Promise<void> {
     this.setBusy(true);
-    this.deps.clearWalk.execute();
-    this.currentWalk = null;
     try {
+      this.clear();
       const count = this.readCount();
       const result = await this.deps.generateWalk.execute(count, this.deps.createRandom());
       if (result.ok) {
@@ -133,7 +137,10 @@ export class DomControls {
     }
   }
 
-  /** Remove all waypoints and lines from the canvas and forget the current walk. */
+  /**
+   * Remove all waypoints and lines from the canvas and forget the current walk (so the toggles
+   * become a no-op until the next Generate). Also used as the first step of {@link generate}.
+   */
   clear(): void {
     this.deps.clearWalk.execute();
     this.currentWalk = null;

@@ -233,6 +233,14 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   values are HARD-CODED in the harness (not imported), so a markup drift fails the gate. Parse without a
   DOM lib: `tagWithId(id)=html.match(/<[^>]*\bid=["']${id}["'][^>]*>/i)?.[0]`, then regex attrs off that
   one tag. When adding/renaming a control id (or its AC markup), update BOTH index.html and this check.
+- DOM-controls `generate()` busy-state contract: `setBusy(true)` runs SYNCHRONOUSLY, then the ENTIRE
+  operation (clear → generate → draw) runs INSIDE a single `try` whose `finally { setBusy(false) }`
+  ALWAYS restores the overlay+disabled button — on success, on the `ok:false` failure signal, on a
+  thrown generation, AND on a thrown clear. NEVER put work between `setBusy(true)` and the `try`: a
+  throw there skips the finally and strands the UI (spinner stuck, button disabled). `generate()`
+  reuses `this.clear()` as its first step (no duplicated clear-then-forget). US-017/US-020 extending
+  generate() must keep new work inside this try. Each Generate pulls a FRESH source via `createRandom()`
+  exactly once (factory, never a cached/shared source) — the seed-agnostic basis of US-022 repro.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1403,3 +1411,37 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     exported). Per the codebase pattern, that's fine — the gate hard-codes the AC golden values
     (10/90/90) rather than importing source constants, so a wrong-but-consistent change to both the
     constant and the markup still fails the gate.
+---
+
+## 2026-06-28 - US-016 (DOM controls driving adapter) — REFINEMENT 2
+- US-016 already passed; re-verified all ACs green (tsc -b, npm test 243 pass, verify:renderer +
+  verify:controls). Closed a finally-COVERAGE gap in `generate()` (impl change) and added two checks.
+- Impl: `generate()` previously ran `setBusy(true)` then `clearWalk.execute()` + `currentWalk = null`
+  OUTSIDE the `try`. A throw in the clear step would skip the `setBusy(false)` finally and STRAND the
+  overlay + disabled button (the UI hangs with the spinner up). Moved the whole operation INSIDE the
+  try (clear → generate → draw), reusing `this.clear()` for the first step so the duplicated
+  clear-then-forget logic lives in one place. Now ANY failure restores the controls; nothing between
+  `setBusy(true)` and the `try` can strand the busy state. (In production `renderer.clear()` —
+  setTransform + clearRect — won't throw, so this is defence-in-depth, but it removes the only window
+  where the finally didn't cover the operation it's responsible for restoring.)
+- Harness: added two verify:controls checks (12 → 14):
+  - (a) Thrown CLEAR step: with a `clearWalk` stub that throws, `generate()` rethrows, draws nothing,
+    and STILL restores overlay+button in the finally. PROVEN TO BITE: reverting to clear-outside-the-try
+    left `generateButton.disabled === true` after the throw (AssertionError actual:true/expected:false);
+    restored → 14/14.
+  - (b) Fresh RandomSource per Generate: wraps `createRandom` in a call counter and asserts it is
+    invoked exactly ONCE per `generate()` (1 then 2 across two generates) — locks the
+    seed-agnostic/no-shared-source contract US-022's single-seed reproducibility depends on. No prior
+    test asserted createRandom's call count (only that a walk was produced).
+- Files changed: src/adapters/dom-controls.ts (generate() restructured + clear() doc),
+  scripts/verify-controls.mjs (2 checks added), src/adapters/CLAUDE.md (overlay-timing +
+  verify:controls bullets updated), scripts/ralph/prd.json (US-016 note: REFINEMENT 2).
+- **Learnings for future iterations:**
+  - An async op that flips a busy/loading flag (`setBusy(true) … finally { setBusy(false) }`) must put
+    the ENTIRE operation inside the `try`. ANY statement between the flag-on and the `try` (here the
+    canvas clear) can throw and strand the UI, because the finally never runs. Pattern: `setBusy(true);
+    try { …everything… } finally { setBusy(false); }` — never `setBusy(true); doWork(); try { … }`.
+  - When refining an already-passing adapter, prefer (1) closing finally/cleanup coverage gaps that
+    strand UI state, and (2) adding gates for implemented-but-unasserted CONTRACTS (here: createRandom
+    is a factory called once-per-generate, the basis of US-022 reproducibility) — both bite real
+    regressions, unlike re-asserting behaviour the existing 12 checks already cover.

@@ -364,6 +364,63 @@ function ok(label) {
   ok("fromDocument resolves controls by id and fails loudly on a missing element");
 }
 
+// ── Robustness: controls restored in finally even when the pre-generation CLEAR step throws ──
+// setBusy(true) runs first, then the whole operation (clear → generate → draw) runs inside the try,
+// so a failure in ANY step — including the canvas clear — still hits the finally and restores the
+// overlay/button. Guards against a regression that clears OUTSIDE the try (stranding the busy state).
+{
+  const renderer = makeFakeRenderer();
+  const deps = {
+    generateWalk: { execute: async () => ({ ok: true, walk: { waypointCount: 90 } }) },
+    clearWalk: {
+      execute: () => {
+        throw new Error("clear boom");
+      },
+    },
+    renderer,
+    createRandom: () => new SeededRandom(SEED),
+  };
+  const els = makeElements();
+  const controls = new DomControls(deps, els);
+
+  await assert.rejects(() => controls.generate(), /clear boom/, "generate rethrows a clear failure");
+  assert.equal(renderer.drawsOf().length, 0, "a clear failure aborts before any draw");
+  assert.equal(els.generateButton.disabled, false, "button restored after a thrown clear");
+  assert.equal(els.loadingOverlay.style.display, "none", "overlay hidden after a thrown clear");
+  ok("Thrown clear step: controls still restored in finally (whole operation inside the try)");
+}
+
+// ── AC: each Generate uses a FRESH RandomSource via createRandom (seed-agnostic, US-022 depends on it) ──
+// The adapter must call the injected createRandom() factory exactly once per generate and never reuse
+// or cache a source — otherwise walk N would depend on prior draws, breaking single-seed reproducibility.
+{
+  let randomsCreated = 0;
+  const renderer = makeFakeRenderer();
+  const deps = {
+    generateWalk: new GenerateWalk({ yieldToEventLoop: () => Promise.resolve() }),
+    clearWalk: new ClearWalk(renderer),
+    renderer,
+    createRandom: () => {
+      randomsCreated++;
+      return new SeededRandom(SEED);
+    },
+  };
+  const els = makeElements();
+  const controls = new DomControls(deps, els);
+
+  await controls.generate();
+  assert.equal(randomsCreated, 1, "first Generate creates exactly one fresh RandomSource");
+  await controls.generate();
+  assert.equal(randomsCreated, 2, "second Generate creates a NEW source (no caching/reuse)");
+  // Same seed each call → byte-identical walks, proving the factory (not a shared mutable source) is used.
+  assert.deepEqual(
+    renderer.drawsOf().map((d) => d.walk.waypointCount),
+    [90, 90],
+    "both generations produced a walk"
+  );
+  ok("Each Generate pulls a fresh RandomSource from createRandom (no shared/cached source)");
+}
+
 // ── AC: the LIVE index.html markup matches the adapter contract (the one un-faked seam) ──
 // Every other check above uses fake elements / a fake document, so a drift between CONTROL_IDS and
 // the real ids in index.html — or a change to the AC-mandated markup (input range/default, toggle
