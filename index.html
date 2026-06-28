@@ -92,6 +92,33 @@
       }
 
       /*
+       * Generation-failure error overlay (US-020). Hidden by default; the DOM controls adapter sets
+       * `style.display = "flex"` when GenerateWalk surfaces the bounded generator's exhausted-re-roll
+       * failure signal (ADR-0002 guarantees this path is reached, never an infinite hang), and hides
+       * it again at the start of the next Generate and on Clear. It sits ABOVE the loading overlay
+       * and the tooltip (z-index) so the message is never occluded.
+       */
+      #error-overlay {
+        position: absolute;
+        inset: 0;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        padding: 1.5rem;
+        background: rgba(255, 255, 255, 0.92);
+        text-align: center;
+        z-index: 3; /* above the loading overlay (2) and the tooltip (1) */
+      }
+      #error-overlay .error-message {
+        margin: 0;
+        max-width: 30rem;
+        color: #b00020;
+        font: 600 1.1rem/1.4 Arial, Helvetica, sans-serif;
+      }
+
+      /*
        * Waypoint tooltip (US-017). A DOM overlay — NOT painted on the canvas — shown when a waypoint is
        * clicked, with its number, turn direction and cumulative generation-space distance. Hidden by
        * default; the DOM controls adapter fills its text, positions it at the click point within this
@@ -166,8 +193,9 @@
        *
        * The hide rules use `!important` deliberately: the DOM controls adapter
        * (src/adapters/dom-controls.ts) sets INLINE `style.display` on the loading overlay (during
-       * generation) and the tooltip (when a waypoint is clicked). An inline style wins over a normal
-       * stylesheet rule, so without `!important` an open tooltip — or a stuck overlay — would print.
+       * generation), the error overlay (US-020, on a failed generation) and the tooltip (when a
+       * waypoint is clicked). An inline style wins over a normal stylesheet rule, so without
+       * `!important` a stuck overlay, an error message, or an open tooltip would print.
        */
       @media print {
         /* Cap the sheet at A4 with a modest margin so the printout is always a single A4 page. */
@@ -180,6 +208,7 @@
         h1,
         .controls,
         #loading-overlay,
+        #error-overlay,
         #waypoint-tooltip {
           display: none !important;
         }
@@ -265,6 +294,11 @@
         <div id="loading-overlay" role="status" aria-live="polite">
           <div class="spinner" aria-hidden="true"></div>
           <span>Generating...</span>
+        </div>
+        <!-- Shown over the canvas when the bounded generator exhausts its re-rolls (US-020); the
+             adapter flips its display. role=alert so it is announced; the message lives here. -->
+        <div id="error-overlay" role="alert" aria-live="assertive">
+          <p class="error-message">Couldn't generate a walk - try again or reduce the waypoint count</p>
         </div>
         <!-- DOM-overlay tooltip for a clicked waypoint (US-017); filled + positioned by the adapter. -->
         <div id="waypoint-tooltip" role="status" aria-live="polite"></div>

@@ -98,6 +98,7 @@ function makeElements() {
     turnsToggle: fakeEl({ checked: true }),
     printButton: fakeEl(),
     loadingOverlay: fakeEl(),
+    errorOverlay: fakeEl(),
     canvas: fakeCanvas(),
     tooltip: fakeEl(),
   };
@@ -278,7 +279,9 @@ function ok(label) {
   ok("Print button opens the browser print dialog");
 }
 
-// ── AC: controls restored in finally even when generation FAILS (bounded failure signal) ──
+// ── US-020 AC: the exhausted-re-roll failure signal shows the error overlay; controls restored ──
+// GenerateWalk surfaces { ok:false } when the bounded generator (ADR-0002) gives up — the UI must
+// show a clear message over the (cleared) canvas and re-enable the controls, never hang or go silent.
 {
   const renderer = makeFakeRenderer();
   const deps = {
@@ -292,10 +295,59 @@ function ok(label) {
 
   await controls.generate();
   assert.equal(renderer.clearsOf().length, 1, "failed generate still cleared the canvas");
-  assert.equal(renderer.drawsOf().length, 0, "failed generate draws nothing (US-020 adds the error)");
-  assert.equal(els.generateButton.disabled, false, "button restored after a failed generation");
-  assert.equal(els.loadingOverlay.style.display, "none", "overlay hidden after a failed generation");
-  ok("Failure signal: canvas left cleared, controls restored in finally");
+  assert.equal(renderer.drawsOf().length, 0, "failed generate draws nothing (the error overlay stands in)");
+  assert.equal(els.errorOverlay.style.display, "flex", "error overlay SHOWN on the failure signal (US-020)");
+  assert.equal(els.generateButton.disabled, false, "controls restored after a failed generation (button re-enabled)");
+  assert.equal(els.loadingOverlay.style.display, "none", "loading overlay hidden after a failed generation");
+  ok("Failure signal (US-020): error overlay shown over the cleared canvas, controls restored in finally");
+}
+
+// ── US-020: a successful retry after a failure dismisses the error; a plain success never shows it ──
+// The leading clear() in generate() hides any prior error, so retrying (or reducing the count) starts
+// clean — and a success must leave the error overlay hidden.
+{
+  const renderer = makeFakeRenderer();
+  let failNext = true;
+  const deps = {
+    generateWalk: {
+      execute: async () =>
+        failNext ? { ok: false, reason: "exhausted", attempts: 9, rerolls: 2 } : { ok: true, walk: { waypointCount: 90 } },
+    },
+    clearWalk: new ClearWalk(renderer),
+    renderer,
+    createRandom: () => new SeededRandom(SEED),
+  };
+  const els = makeElements();
+  const controls = new DomControls(deps, els);
+
+  await controls.generate();
+  assert.equal(els.errorOverlay.style.display, "flex", "error shown after the first (failed) generate");
+
+  // Retry — this one succeeds: the error must be dismissed and the walk drawn.
+  failNext = false;
+  await controls.generate();
+  assert.equal(els.errorOverlay.style.display, "none", "error dismissed by a successful retry");
+  assert.equal(renderer.drawsOf().length, 1, "the successful retry drew the walk");
+  ok("Successful retry dismisses the error overlay; a plain success never shows it");
+}
+
+// ── US-020: Clear dismisses an error left by a failed generation ──
+{
+  const renderer = makeFakeRenderer();
+  const deps = {
+    generateWalk: { execute: async () => ({ ok: false, reason: "exhausted", attempts: 9, rerolls: 2 }) },
+    clearWalk: new ClearWalk(renderer),
+    renderer,
+    createRandom: () => new SeededRandom(SEED),
+  };
+  const els = makeElements();
+  const controls = new DomControls(deps, els);
+
+  await controls.generate();
+  assert.equal(els.errorOverlay.style.display, "flex", "error shown after the failed generate");
+  els.clearButton.dispatch("click");
+  assert.equal(els.errorOverlay.style.display, "none", "Clear dismisses the generation-failure error");
+  ok("Clear dismisses the generation-failure error overlay");
 }
 
 // ── Robustness: controls restored in finally even when generation THROWS ──
@@ -373,6 +425,7 @@ function ok(label) {
     [CONTROL_IDS.turnsToggle]: els.turnsToggle,
     [CONTROL_IDS.printButton]: els.printButton,
     [CONTROL_IDS.loadingOverlay]: els.loadingOverlay,
+    [CONTROL_IDS.errorOverlay]: els.errorOverlay,
     [CONTROL_IDS.canvas]: els.canvas,
     [CONTROL_IDS.tooltip]: els.tooltip,
   };
@@ -501,6 +554,21 @@ function ok(label) {
   assert.ok(/#waypoint-tooltip\s*\{[^}]*white-space:\s*pre-line/i.test(html), "tooltip renders multi-line text (white-space: pre-line)");
   ok("index.html markup matches the adapter contract (ids, input range/default, toggles, overlay, tooltip)");
 
+  // 5b. Error overlay (US-020): a DOM overlay over the canvas carrying the exact failure message, so
+  //     a failed generation shows a clear error rather than a silent blank or a hang. The message
+  //     lives in the markup (like "Generating..."), the adapter only flips its display — so this is
+  //     its wording gate. The golden text is HARD-CODED here, NOT imported, so a drift fails the gate.
+  //     Scope the message + role to the #error-overlay block so an unrelated page string can't satisfy
+  //     it vacuously. Positioned absolutely (`position:absolute`) so it sits OVER the canvas (AC1).
+  const ERROR_MESSAGE = "Couldn't generate a walk - try again or reduce the waypoint count";
+  assert.ok(tagWithId(CONTROL_IDS.errorOverlay), "index.html has the #error-overlay element");
+  const errorBlock = html.match(/<div\b[^>]*\bid=["']error-overlay["'][\s\S]*?<\/div>/i)?.[0] ?? null;
+  assert.ok(errorBlock, "index.html has a <div id=error-overlay> ... </div> block");
+  assert.ok(errorBlock.includes(ERROR_MESSAGE), `error overlay shows the exact AC message: "${ERROR_MESSAGE}"`);
+  assert.ok(/\brole=["']alert["']/i.test(errorBlock), "error overlay is role=alert (announced to assistive tech)");
+  assert.ok(/#error-overlay\s*\{[^}]*position:\s*absolute/i.test(html), "error overlay is absolutely positioned (over the canvas)");
+  ok("Error overlay (US-020): DOM overlay over the canvas with the exact failure message");
+
   // 6. Legend (US-018): a DOM/HTML legend BELOW the canvas (not canvas-painted) with three entries —
   //    Start/End, Waypoint, Wildcard — whose swatches MIRROR the canvas symbol colours. There is no
   //    other gate for it (the legend is static markup; the adapter never touches it), so this is its
@@ -594,11 +662,12 @@ function ok(label) {
   const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const ruleFor = (selectorRe) => printBlock.match(new RegExp(`${selectorRe}[^{}]*\\{[^}]*\\}`, "i"))?.[0] ?? null;
 
-  // Chrome + heading hidden in print. The overlay/tooltip hides MUST be !important: the adapter sets
-  // their display via INLINE style (overlay during generation, tooltip on a waypoint click), which
-  // would otherwise beat the stylesheet and print a stuck overlay / an open tooltip over the map.
-  const mustImportant = new Set(["#loading-overlay", "#waypoint-tooltip"]);
-  for (const selector of [".controls", "#loading-overlay", "#waypoint-tooltip", "h1"]) {
+  // Chrome + heading hidden in print. The overlay/tooltip/error hides MUST be !important: the adapter
+  // sets their display via INLINE style (loading overlay during generation, error overlay on a failed
+  // generation, tooltip on a waypoint click), which would otherwise beat the stylesheet and print a
+  // stuck overlay / an error message / an open tooltip over the map.
+  const mustImportant = new Set(["#loading-overlay", "#error-overlay", "#waypoint-tooltip"]);
+  for (const selector of [".controls", "#loading-overlay", "#error-overlay", "#waypoint-tooltip", "h1"]) {
     const rule = ruleFor(escapeRe(selector));
     assert.ok(rule && /display\s*:\s*none/i.test(rule), `${selector} is hidden in print (display: none)`);
     if (mustImportant.has(selector)) {

@@ -42,6 +42,7 @@ export const CONTROL_IDS = {
   turnsToggle: "toggle-turns",
   printButton: "print-button",
   loadingOverlay: "loading-overlay",
+  errorOverlay: "error-overlay",
   canvas: "walk-canvas",
   tooltip: "waypoint-tooltip",
 } as const;
@@ -72,6 +73,8 @@ export interface DomControlsElements {
   readonly turnsToggle: HTMLInputElement;
   readonly printButton: HTMLButtonElement;
   readonly loadingOverlay: HTMLElement;
+  /** Shown over the canvas when generation exhausts its bounded re-rolls (US-020); hidden otherwise. */
+  readonly errorOverlay: HTMLElement;
   /** The canvas the renderer draws to; this adapter listens here for click/hover and sets the cursor. */
   readonly canvas: HTMLCanvasElement;
   /** The DOM-overlay tooltip shown on a waypoint click (US-017); positioned over the canvas wrapper. */
@@ -107,6 +110,7 @@ export class DomControls {
       turnsToggle: required<HTMLInputElement>(doc, CONTROL_IDS.turnsToggle),
       printButton: required<HTMLButtonElement>(doc, CONTROL_IDS.printButton),
       loadingOverlay: required<HTMLElement>(doc, CONTROL_IDS.loadingOverlay),
+      errorOverlay: required<HTMLElement>(doc, CONTROL_IDS.errorOverlay),
       canvas: required<HTMLCanvasElement>(doc, CONTROL_IDS.canvas),
       tooltip: required<HTMLElement>(doc, CONTROL_IDS.tooltip),
     });
@@ -135,13 +139,17 @@ export class DomControls {
   /**
    * Clear the canvas, then generate and draw a freshly randomised walk for the current waypoint
    * count. The Generate button is disabled and the loading overlay shown for the whole generation,
-   * both restored in a `finally`. On the bounded generator's failure signal the canvas is left
-   * cleared (US-020 renders the error message); the overlay/button are restored either way.
+   * both restored in a `finally`. On the bounded generator's exhausted-re-roll failure signal the
+   * canvas is left cleared and the error overlay is shown over it (US-020); the overlay/button are
+   * restored either way. Generation is bounded (ADR-0002), so this never hangs — the failure path is
+   * reached and surfaced, not spun on forever.
    *
    * Everything after `setBusy(true)` runs inside the `try`, so ANY failure — the clear, the
    * generation, or the draw — still hits the `finally` and restores the controls; the busy state is
    * never stranded. A fresh {@link RandomSource} is produced per call via `createRandom`, so each
-   * Generate starts an independent deterministic stream (US-022's single-seed reproducibility).
+   * Generate starts an independent deterministic stream (US-022's single-seed reproducibility). The
+   * leading `clear()` also dismisses any error left over from a previous failed attempt, so a retry
+   * (or a smaller waypoint count) starts from a clean slate.
    */
   async generate(): Promise<void> {
     this.setBusy(true);
@@ -152,8 +160,11 @@ export class DomControls {
       if (result.ok) {
         this.currentWalk = result.walk;
         this.deps.renderer.draw(result.walk, this.displayOptions());
+      } else {
+        // The bounded generator exhausted its re-rolls (ADR-0002): show a clear error over the
+        // (already-cleared) canvas rather than leaving the user with a silent blank or a hang.
+        this.showError();
       }
-      // result.ok === false: the canvas stays cleared; US-020 layers the error overlay on top.
     } finally {
       this.setBusy(false);
     }
@@ -161,14 +172,16 @@ export class DomControls {
 
   /**
    * Remove all waypoints and lines from the canvas and forget the current walk (so the toggles
-   * become a no-op until the next Generate). Also dismisses the waypoint tooltip and drops any hover
-   * highlight, since the walk they referred to is gone. Used as the first step of {@link generate}
-   * too, so a fresh Generate dismisses the tooltip as well (US-017 AC2).
+   * become a no-op until the next Generate). Also dismisses the waypoint tooltip and the generation-
+   * failure error, and drops any hover highlight, since the walk they referred to is gone. Used as
+   * the first step of {@link generate} too, so a fresh Generate dismisses the tooltip and any prior
+   * error as well (US-017 AC2 / US-020 retry).
    */
   clear(): void {
     this.deps.clearWalk.execute();
     this.currentWalk = null;
     this.hideTooltip();
+    this.hideError();
     this.clearHover();
   }
 
@@ -275,6 +288,19 @@ export class DomControls {
   private setBusy(busy: boolean): void {
     this.elements.generateButton.disabled = busy;
     this.elements.loadingOverlay.style.display = busy ? "flex" : "none";
+  }
+
+  /**
+   * Show the generation-failure error over the canvas (US-020). The message itself lives in the
+   * markup (index.html), like the loading overlay's "Generating..." text; this only reveals it.
+   */
+  private showError(): void {
+    this.elements.errorOverlay.style.display = "flex";
+  }
+
+  /** Hide the generation-failure error (on Clear and at the start of each Generate — see {@link clear}). */
+  private hideError(): void {
+    this.elements.errorOverlay.style.display = "none";
   }
 }
 

@@ -369,6 +369,20 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   legitimate cap tweak never fails spuriously. Helper `mmOf(rule, prop)` parses `<prop>: <n>mm` with
   `(?<![-\w])prop(?![-\w])` boundaries so "margin" doesn't clash with "margin-top". Proven to bite:
   max-height 245mm->280mm fired the AssertionError (296 > 273); reverted.
+- The generation-failure error overlay (US-020) follows the EXACT loading-overlay pattern (US-016): a
+  `#error-overlay` element in index.html (markup + CSS), default `display:none`, that the adapter
+  reveals by flipping its INLINE `style.display` to `"flex"` — the adapter NEVER sets its textContent;
+  the message ('Couldn't generate a walk - try again or reduce the waypoint count') lives in the markup
+  like 'Generating...'. dom-controls `generate()`'s `else` branch (on `result.ok===false`) calls
+  `showError()`; `clear()` calls `hideError()`, so the error is dismissed at the START of every Generate
+  (retry/smaller count starts clean) AND on the Clear button, and the SAME `setBusy(false)` finally
+  restores the button. AC2 'never hangs' is FREE: the generator is bounded (ADR-0002) so the failure
+  signal is reached, not spun on. When adding chrome the adapter shows via INLINE style, you MUST: add
+  it to CONTROL_IDS/DomControlsElements/fromDocument; add it to the `@media print` hide list with
+  `display:none !important` (an inline-display element beats a normal stylesheet rule, else it prints
+  over the map); and extend verify:controls (a behaviour check that it's shown on the trigger + hidden
+  on dismiss, and an index.html-markup check for the element + its golden text scoped to its own block).
+  Prove each new gate bites then revert via a precise Edit (NOT git checkout — uncommitted story files).
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1921,4 +1935,52 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - To prove a CSS arithmetic gate bites on an uncommitted index.html: back it up (`cp`), `sed` the
     value to a page-breaking one, run the gate (expect fail), then restore from the backup — do NOT
     `git checkout` (would wipe other uncommitted story work, per the earlier US-017 GOTCHA).
+---
+
+## 2026-06-28 - US-020 (Graceful generation-failure error)
+- Implemented the generation-failure error overlay. When GenerateWalk surfaces the bounded generator's
+  exhausted-re-roll failure signal (result.ok===false), the DOM controls adapter shows a clear message
+  over the (cleared) canvas and leaves the controls restored — no silent blank, no hang.
+- Files changed:
+  - src/adapters/dom-controls.ts: added `errorOverlay` to CONTROL_IDS / DomControlsElements /
+    fromDocument; generate()'s new `else` branch calls showError() on {ok:false}; clear() now calls
+    hideError() (dismisses the error at the start of every Generate and on the Clear button); added
+    showError()/hideError() next to setBusy(). The message text is NOT set by the adapter — it lives in
+    the markup (mirrors the loading overlay's 'Generating...').
+  - index.html: added the #error-overlay div (role=alert, aria-live=assertive, message in a
+    <p class="error-message">) inside .canvas-wrap; CSS positions it over the canvas (position:absolute;
+    inset:0; display:none default; z-index:3 above the loading overlay/tooltip; red #b00020 message);
+    added #error-overlay to the @media print hide list with `display:none !important` (the adapter sets
+    its display INLINE, so a non-important hide would print the error over the map).
+  - scripts/verify-controls.mjs: added errorOverlay to makeElements + the fromDocument id map; the
+    failure-signal behaviour check now also asserts the overlay is SHOWN on {ok:false}; added a
+    successful-retry-dismisses check and a Clear-dismisses check; the index.html-markup block gained
+    item 5b (error overlay exists, exact AC message scoped to its block, role=alert, position:absolute)
+    and item 7 (print) now lists #error-overlay among the !important-hidden chrome. 24 -> 27 checks.
+  - src/adapters/CLAUDE.md, scripts/ralph/progress.txt (Codebase Patterns): documented the pattern.
+- Quality gate (all green): npm run clean + npm run build (tsc -b) typecheck clean; npm test 243 pass
+  (no regressions — adapters aren't covered by node:test by design); npm run verify:renderer green;
+  npm run verify:controls 27/27.
+- Proven to bite then reverted via precise Edits (NOT git checkout): (1) removing showError() fails the
+  behaviour check 'error overlay SHOWN on the failure signal (US-020)'; (2) changing the index.html
+  message fails the markup check 'error overlay shows the exact AC message'.
+- Visual evidence (qlmanage stand-in, no browser/Playwright MCP in this env): rasterized the REAL
+  index.html with #error-overlay forced display:flex (exactly what showError sets) — the red failure
+  message centred over the cleared canvas, ALL controls present, the Generate button ENABLED (restored),
+  legend below. Not committed (repo convention: no binary screenshots; the qlmanage render is ephemeral
+  evidence, the verify:controls gate is the regression check).
+- **Learnings for future iterations:**
+  - AC2 ("the UI never hangs") needed NO code: it holds by construction because the generator is bounded
+    (ADR-0002, 200 attempts / grow×10 / reroll×20) and GenerateWalk drives that synchronous iterator to
+    its terminal {ok:false} value. The error path is REACHED, never spun on — US-010/US-011 already
+    guarantee termination, so US-020 is purely 'surface the existing failure signal in the UI'.
+  - To force the failure path in a behaviour test, you do NOT need a real impossible generation — stub
+    `generateWalk.execute` to return `{ ok:false, reason, attempts, rerolls }` (the GenerationResult
+    failure shape). That's deterministic and fast; the real bounded failure path is proven in US-010/011.
+  - Dismiss-at-start-of-Generate comes FREE by putting hideError() in clear() (generate()'s first step
+    routes through clear()), the same trick US-017 used for the tooltip. One place to dismiss = the
+    Clear button and a retry both work without duplicated logic.
+  - New adapter chrome shown via INLINE style.display MUST be added to the @media print hide list with
+    `!important` (US-019 gotcha) — verify:controls item 7's mustImportant set + selector loop both need
+    the new id, or a stuck overlay/error prints over the map.
 ---

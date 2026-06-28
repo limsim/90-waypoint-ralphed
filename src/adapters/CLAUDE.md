@@ -179,6 +179,24 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   asserts the unprefixed property via a `(?<!-)print-color-adjust:exact` lookbehind (so the prefix
   alone doesn't satisfy it); proven to bite by dropping the standard line. Any future swatch / printed
   background colour needs this too — borders (the waypoint outline, wildcard ring) print regardless.
+- **Generation-failure error overlay (US-020).** When `GenerateWalk` returns the bounded generator's
+  exhausted-re-roll failure signal (`result.ok === false` — ADR-0002 guarantees this path is REACHED,
+  never an infinite hang), `generate()`'s `else` branch calls `showError()`, which flips the
+  `#error-overlay` element's inline `display` to `"flex"` over the (already-cleared) canvas. The MESSAGE
+  text ("Couldn't generate a walk - try again or reduce the waypoint count") lives in the MARKUP
+  (index.html `#error-overlay`), exactly like the loading overlay's "Generating..." — the adapter only
+  reveals/hides it, it never sets `textContent`. It is hidden again by `clear()` (so it's dismissed at
+  the START of every Generate — a retry / smaller count starts clean — AND on the Clear button) and
+  stays hidden on a successful generate. The controls are restored by the SAME `setBusy(false)` finally
+  as every other path (so a failure re-enables the button). `#error-overlay` is added to
+  `CONTROL_IDS`/`DomControlsElements`/`fromDocument`, and to the `@media print` hide list with
+  `display: none !important` (the adapter sets its display INLINE, so a non-important hide would print
+  the error over the map — same reason as the loading overlay/tooltip). `verify:controls` covers it:
+  the failure-signal behaviour check now also asserts the overlay is SHOWN on `{ ok:false }` (proven to
+  bite — remove `showError()` → the check fails), plus a successful-retry-dismisses and a Clear-dismisses
+  check; the index.html-markup block asserts the `#error-overlay` element exists, carries the EXACT AC
+  message (golden text hard-coded, scoped to the `#error-overlay` block — proven to bite), is
+  `role=alert` + `position:absolute`, and is in the print hide list (`!important`).
 - CAVEAT (carried from US-013/14/15/16): a LIVE browser screenshot for human sign-off is still pending —
   no browser/Playwright MCP in this env, and the controls (incl. US-017 click/hover, which need
   `DomControls` constructed) only become interactive once US-021 wires main.ts (composition root +
