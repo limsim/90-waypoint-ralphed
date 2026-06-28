@@ -556,6 +556,24 @@ async function generated(seed = SEED) {
   ok("Click the Start waypoint: tooltip shows it as the start with distance 0");
 }
 
+// ── US-017: tooltip content for the terminal End (last) waypoint — no turn, full cumulative distance ──
+// Exercises turnDescription's isLast branch ("none (end)"), the only terminal branch the Start test
+// above does not cover, and asserts the end waypoint's distance is the walk's TOTAL path length.
+{
+  const { els, renderer, walk } = await generated();
+  const last = walk.waypoints[walk.waypoints.length - 1];
+  assert.ok(last.isLast, "the last waypoint is the End terminal");
+  renderer.hitTarget = last;
+  els.canvas.dispatch("click", { clientX: 700, clientY: 700 });
+  const text = els.tooltip.textContent;
+  assert.ok(text.includes(`Waypoint ${last.sequenceNumber}`), "end tooltip shows the last waypoint number");
+  assert.ok(text.includes("Turn: none (end)"), "end tooltip marks it as the end with no turn");
+  const total = Math.round(walk.totalDistance);
+  assert.equal(total, Math.round(walk.cumulativeDistanceTo(last.sequenceNumber - 1)), "end cumulative distance is the total");
+  assert.ok(text.includes(`${total} px from start`), "end tooltip shows the full cumulative distance (the total)");
+  ok("Click the End waypoint: tooltip shows it as the end with the full cumulative distance");
+}
+
 // ── US-017: a wildcard waypoint's tooltip reports the Wildcard turn ──
 {
   const { els, renderer, walk } = await generated();
@@ -565,6 +583,39 @@ async function generated(seed = SEED) {
   els.canvas.dispatch("click", { clientX: 5, clientY: 5 });
   assert.ok(els.tooltip.textContent.includes("Turn: Wildcard"), "wildcard tooltip reports the Wildcard turn");
   ok("Click a wildcard waypoint: tooltip reports the Wildcard turn");
+}
+
+// ── US-017 AC1: the cumulative distance is GENERATION-space px, so it is stable across a resize ──
+// The tooltip's distance must come from the domain Walk, not from screen pixels — so resizing the
+// canvas element (its getBoundingClientRect changes, exactly as US-015's CSS scale does on a narrow
+// viewport) must not change the reported distance. Re-clicking the SAME waypoint at the SAME client
+// coords after a resize must show a byte-identical distance line (only the on-screen position may move).
+{
+  const { els, renderer, walk } = await generated();
+  const interior = walk.waypoints.find((w) => w.isInterior);
+  const distanceLine = (text) => text.split("\n").find((line) => line.endsWith("px from start"));
+  const expected = `${Math.round(walk.cumulativeDistanceTo(interior.sequenceNumber - 1))} px from start`;
+
+  renderer.hitTarget = interior;
+  els.canvas.dispatch("click", { clientX: 300, clientY: 300 });
+  const before = distanceLine(els.tooltip.textContent);
+  const posBefore = [els.tooltip.style.left, els.tooltip.style.top];
+  assert.equal(before, expected, "distance line is the generation-space value before the resize");
+
+  // Resize: the element is now displayed half-size and shifted (a narrower viewport / scroll).
+  const rect = els.canvas.getBoundingClientRect(); // fakeCanvas returns the same mutable object
+  rect.left = 40;
+  rect.top = 60;
+  rect.width = 397;
+  rect.height = 561.5;
+
+  els.canvas.dispatch("click", { clientX: 300, clientY: 300 });
+  const after = distanceLine(els.tooltip.textContent);
+  assert.equal(after, before, "distance line is unchanged after the resize (generation-space, not screen px)");
+  assert.equal(after, expected, "distance line still equals the generation-space value after the resize");
+  // Sanity: the rect IS genuinely consulted (position tracked the moved origin), so the test isn't vacuous.
+  assert.notDeepEqual([els.tooltip.style.left, els.tooltip.style.top], posBefore, "tooltip position tracked the resized rect");
+  ok("Tooltip distance is generation-space px, stable across a canvas resize (AC1)");
 }
 
 // ── US-017: tooltip dismisses on a click over empty canvas, on Clear, and on Generate; survives redraws ──

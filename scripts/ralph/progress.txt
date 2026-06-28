@@ -281,6 +281,17 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   the ENTIRE story's uncommitted changes (not just the temporary tweak). The build may still pass after
   such an accidental wipe if nothing typed-assigns the reverted class (CanvasRenderer is only `new`ed in
   verify scripts at runtime + in not-yet-wired main.ts), so the loss is silent — re-run all gates.
+- To assert a DOM-overlay value is RESIZE-STABLE (US-017 AC1: tooltip distance is generation-space px,
+  not screen px), verify:controls' `fakeCanvas` returns the SAME mutable rect object every
+  `getBoundingClientRect()` call — so mutate that rect's width/height/left/top IN PLACE to simulate a
+  resize/CSS-scale, re-issue the SAME client coords on the SAME hit target, and assert the text line is
+  byte-identical AND that the on-screen POSITION changed (else the test passes vacuously with the rect
+  ignored). GOTCHA proving such a regression bites: the fake elements have NO `.width`/`.height` (only
+  the renderer's real HTMLCanvasElement does) — a proof-of-bite dividing by `canvas.width` yields NaN
+  and trips an EARLIER test, not the targeted one; scale by the A4 literal (794) or `rect.width` instead.
+  Also: when a terminal/branch enum has N cases (turnDescription: start/end/wildcard/L/R), click a
+  waypoint of EACH kind — the End ("none (end)") branch was long untested because only Start+wildcard
+  +interior were exercised; the End wp also cross-checks distance === walk.totalDistance.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1538,4 +1549,43 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     is silent — re-run every gate.
   - US-020 (failure error overlay) will extend dom-controls.generate(); keep new work inside the
     existing try/finally and remember the tooltip/hover dismissal already happens via clear().
+---
+
+## 2026-06-28 - US-017 (Waypoint click tooltip and hover highlighting) — REFINEMENT
+- US-017 already passed; re-verified all acceptance criteria green end to end (tsc -b clean; npm test
+  243 pass; npm run verify:renderer all assertions pass; npm run verify:controls now 22/22). No
+  implementation change — closed two implemented-but-UNASSERTED AC clauses in the verify:controls gate
+  (20 -> 22 checks), the codebase's standard refinement move (test the ACs the prior passes implemented
+  but never directly exercised).
+- What was added (scripts/verify-controls.mjs only):
+  - (a) END-waypoint tooltip test. The prior gate clicked an interior waypoint, the Start (isFirst ->
+    "none (start)") and a wildcard ("Wildcard"), but NEVER the End waypoint — so turnDescription's
+    `isLast` branch ("none (end)") had no regression guard, and the end waypoint's distance (= the
+    walk TOTAL) was unchecked. New test clicks the last waypoint and asserts `Turn: none (end)` plus
+    `round(totalDistance) === round(cumulativeDistanceTo(N-1))` and that the tooltip shows that total.
+  - (b) AC1 "stable across resizes" test. The tooltip distance is GENERATION-space px sourced from the
+    domain Walk, never screen pixels. New test clicks an interior waypoint, then mutates the fake
+    canvas getBoundingClientRect (half-size + shifted origin — exactly US-015's CSS element scale on a
+    narrow viewport), re-clicks the SAME waypoint at the SAME client coords, and asserts the
+    "N px from start" line is byte-identical across the resize. It also asserts the tooltip POSITION
+    DID move (notDeepEqual) so the rect is genuinely consulted and the test isn't vacuous.
+- Files changed: scripts/verify-controls.mjs (2 checks added), scripts/ralph/prd.json (US-017 notes
+  appended), scripts/ralph/progress.txt (this entry).
+- Both new checks PROVEN TO BITE then reverted:
+  - isLast -> "none" (drop the "(end)") fails the End test's `Turn: none (end)` assertion.
+  - sourcing distance from `rect.width` (screen px) fails "distance line is unchanged after the resize".
+- **Learnings for future iterations:**
+  - GOTCHA when proving a tooltip-distance regression bites: the fake canvas element (fakeEl) has NO
+    `.width`/`.height` property (only the renderer's real HTMLCanvasElement does). A proof-of-bite that
+    divides by `canvas.width` yields NaN and fails an EARLIER test instead of the one you're targeting.
+    Scale by the A4 literal (794) or `rect.width` instead — both exist on the fakes.
+  - fakeCanvas's `getBoundingClientRect: () => rect` returns the SAME mutable object every call, so a
+    test can simulate a resize by mutating the returned rect's `width`/`height`/`left`/`top` in place;
+    no need to rebuild the element. Useful for any "stable across resizes / reposition" assertion.
+  - When a tooltip/label sources a value from the domain (generation-space), prove it's resize-stable by
+    re-issuing the SAME client coords after mutating the rect and asserting the text is byte-identical —
+    and ALSO assert the screen POSITION changed, or the test can pass vacuously (rect ignored entirely).
+  - Reverting a "prove it bites" tweak on the UNCOMMITTED story files: use a precise reverse Edit, NOT
+    `git checkout <file>` (which would wipe the whole story's uncommitted work), then `npm run clean`
+    before re-running so incremental `tsc -b` doesn't keep a stale dist (mtime-after-revert gotcha).
 ---
