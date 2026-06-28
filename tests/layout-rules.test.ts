@@ -7,12 +7,14 @@ import { Waypoint } from "../src/domain/waypoint.js";
 import { Turn } from "../src/domain/turn.js";
 import {
   WAYPOINT_RADIUS,
+  MIN_WAYPOINT_GAP,
   MIN_PARALLEL_SEPARATION,
   MIN_SEGMENT_WAYPOINT_CLEARANCE,
   TURN_LABEL_OFFSET,
   TURN_LABEL_CLEARANCE,
   BOUNDS_PADDING,
   noWaypointCirclesOverlap,
+  nonAdjacentWaypointsKeepMinGap,
   noCloseParallelSegments,
   noSegmentCloseToNonAdjacentWaypoint,
   noSegmentThroughNonAdjacentWaypointCircle,
@@ -40,11 +42,16 @@ function mkSeg(x1: number, y1: number, x2: number, y2: number): Segment {
 
 test("layout-rules: constants have expected values", () => {
   assert.equal(WAYPOINT_RADIUS, 25);
+  assert.equal(MIN_WAYPOINT_GAP, 20);
   assert.equal(MIN_PARALLEL_SEPARATION, 55);
   assert.equal(MIN_SEGMENT_WAYPOINT_CLEARANCE, 35);
   assert.equal(TURN_LABEL_OFFSET, 46);
   assert.equal(TURN_LABEL_CLEARANCE, 8);
   assert.equal(BOUNDS_PADDING, 30);
+});
+
+test("layout-rules: the non-adjacent min separation is 2*radius + gap = 70px", () => {
+  assert.equal(2 * WAYPOINT_RADIUS + MIN_WAYPOINT_GAP, 70);
 });
 
 // ---- noWaypointCirclesOverlap ----
@@ -88,6 +95,68 @@ test("noWaypointCirclesOverlap: empty list passes", () => {
 
 test("noWaypointCirclesOverlap: single waypoint passes", () => {
   assert.equal(noWaypointCirclesOverlap([mkWp(1, 2, 0, 0)]), true);
+});
+
+// ---- nonAdjacentWaypointsKeepMinGap (US-023 / ADR-0007) ----
+// Non-adjacent (sequence gap > 1) waypoint centres must be >= 70px apart (2*25 + 20 gap).
+// Adjacent (consecutive) waypoints are exempt. The lone non-adjacent pair in a 3-waypoint walk is
+// wp[0]/wp[2]; wp[1] is placed off to the side so it only forms (exempt) adjacent pairs.
+
+test("nonAdjacentWaypointsKeepMinGap: non-adjacent pair exactly 70px apart passes (boundary)", () => {
+  const wps = [mkWp(1, 3, 0, 0), mkWp(2, 3, 35, 300), mkWp(3, 3, 70, 0)];
+  assert.equal(nonAdjacentWaypointsKeepMinGap(wps), true);
+});
+
+test("nonAdjacentWaypointsKeepMinGap: non-adjacent pair 69px apart fails (boundary)", () => {
+  const wps = [mkWp(1, 3, 0, 0), mkWp(2, 3, 35, 300), mkWp(3, 3, 69, 0)];
+  assert.equal(nonAdjacentWaypointsKeepMinGap(wps), false);
+});
+
+test("nonAdjacentWaypointsKeepMinGap: adjacent pairs at ~60px are NOT flagged", () => {
+  // Three collinear waypoints 60px apart: each adjacent pair (60px) is exempt even though it is
+  // below 70px; the only checked pair is the non-adjacent wp[0]/wp[2] at 120px (>= 70).
+  const wps = [mkWp(1, 3, 0, 0), mkWp(2, 3, 60, 0), mkWp(3, 3, 120, 0)];
+  assert.equal(nonAdjacentWaypointsKeepMinGap(wps), true);
+});
+
+test("nonAdjacentWaypointsKeepMinGap: an adjacent corner at 60px is exempt", () => {
+  // A real L-corner: wp0->wp1 (60px) and wp1->wp2 (90px) are adjacent and exempt; the non-adjacent
+  // wp0/wp2 pair is hypot(60,90) ≈ 108px (>= 70), so the whole walk passes.
+  const wps = [mkWp(1, 3, 0, 0), mkWp(2, 3, 60, 0), mkWp(3, 3, 60, 90)];
+  assert.equal(nonAdjacentWaypointsKeepMinGap(wps), true);
+});
+
+test("nonAdjacentWaypointsKeepMinGap: the reported #49/#54 tangent case (50px) is now rejected", () => {
+  // Two non-adjacent circles sitting tangent (centres 2*radius = 50px apart) passed the old
+  // hard-overlap floor but read as a collision (ADR-0007). The new rule rejects them.
+  const wps = [mkWp(1, 3, 0, 0), mkWp(2, 3, 300, 0), mkWp(3, 3, 50, 0)];
+  assert.equal(noWaypointCirclesOverlap(wps), true, "tangent circles clear the old 50px floor");
+  assert.equal(nonAdjacentWaypointsKeepMinGap(wps), false, "but fail the new 70px min-gap");
+});
+
+test("nonAdjacentWaypointsKeepMinGap: a non-adjacent pair at 60px IS flagged (contrast adjacent)", () => {
+  // Same 60px separation that is exempt between adjacent waypoints is a violation between
+  // non-adjacent ones (wp[0]/wp[2]).
+  const wps = [mkWp(1, 3, 0, 0), mkWp(2, 3, 300, 0), mkWp(3, 3, 60, 0)];
+  assert.equal(nonAdjacentWaypointsKeepMinGap(wps), false);
+});
+
+test("nonAdjacentWaypointsKeepMinGap: empty / single / 2-waypoint walks pass (no non-adjacent pairs)", () => {
+  assert.equal(nonAdjacentWaypointsKeepMinGap([]), true);
+  assert.equal(nonAdjacentWaypointsKeepMinGap([mkWp(1, 2, 0, 0)]), true);
+  // The two waypoints are adjacent (and only 10px apart) — exempt, so it still passes.
+  assert.equal(nonAdjacentWaypointsKeepMinGap([mkWp(1, 2, 0, 0), mkWp(2, 2, 10, 0)]), true);
+});
+
+test("nonAdjacentWaypointsKeepMinGap: one too-close pair among many well-spaced waypoints fails", () => {
+  // wp[0]/wp[3] fold back to 64px (non-adjacent) → fail, even though every other pair is clear.
+  const wps = [
+    mkWp(1, 4, 0, 0),
+    mkWp(2, 4, 200, 0),
+    mkWp(3, 4, 200, 200),
+    mkWp(4, 4, 0, 64),
+  ];
+  assert.equal(nonAdjacentWaypointsKeepMinGap(wps), false);
 });
 
 // ---- noCloseParallelSegments ----
@@ -310,6 +379,26 @@ test("checkLayout: overlapping waypoints produces waypoint-circles-overlap viola
   const segs = [mkSeg(100, 100, 130, 100)];
   const v = checkLayout(wps, segs, bounds);
   assert.ok(v.some(x => x.rule === "waypoint-circles-overlap"));
+});
+
+test("checkLayout: non-adjacent waypoints closer than 70px produce non-adjacent-waypoints-too-close violation", () => {
+  const bounds = new Bounds(0, 0, 500, 500);
+  // wp[0](100,100) and wp[2](148,136) are non-adjacent and 60px apart (>= 50 so the circles do NOT
+  // overlap, < 70 so the min-gap rule fires). Segments are kept clear of all non-adjacent waypoints
+  // so this fixture isolates the new rule.
+  const wps = [
+    mkWp(1, 3, 100, 100),
+    mkWp(2, 3, 100, 400, Turn.Left),
+    mkWp(3, 3, 148, 136),
+  ];
+  const segs = [mkSeg(100, 100, 100, 400), mkSeg(100, 400, 148, 400)];
+  const v = checkLayout(wps, segs, bounds);
+  assert.ok(v.some(x => x.rule === "non-adjacent-waypoints-too-close"));
+  assert.ok(
+    !v.some(x => x.rule === "waypoint-circles-overlap"),
+    "60px >= 50px, so the separate hard-overlap floor is not tripped"
+  );
+  assert.equal(v.length, 1, "the fixture isolates the min-gap rule");
 });
 
 test("checkLayout: out-of-bounds waypoint produces waypoint-out-of-bounds violation", () => {

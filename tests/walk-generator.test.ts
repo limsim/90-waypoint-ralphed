@@ -12,6 +12,7 @@ import { Walk } from "../src/domain/walk.js";
 import { Turn } from "../src/domain/turn.js";
 import { Bounds } from "../src/domain/bounds.js";
 import { SeededRandom } from "../src/domain/seeded-random.js";
+import { WAYPOINT_RADIUS, MIN_WAYPOINT_GAP } from "../src/domain/layout-rules.js";
 
 /** Drive the generator iterator to completion and return its final result. */
 function drive(
@@ -88,6 +89,34 @@ test("produced walks are valid across many seeds (no Walk.create violation)", ()
   for (let seed = 1; seed <= 12; seed++) {
     const walk = expectWalk(drive(90, seed));
     assert.equal(walk.waypointCount, 90);
+  }
+});
+
+// ---- non-adjacent minimum gap (US-023 / ADR-0007) ----
+
+test("every non-adjacent waypoint pair keeps the 70px min gap, across seeds and counts", () => {
+  // The generator's incremental conflict check enforces the same min-gap the Walk invariant does,
+  // so generated walks satisfy it directly (and `expectWalk` already proves Walk.create accepted
+  // them — i.e. no invariant throw). This asserts the geometric guarantee itself across a spread of
+  // sizes (10/25/60/90) and seeds. Adjacent pairs (index gap 1) are exempt and not checked.
+  const MIN = 2 * WAYPOINT_RADIUS + MIN_WAYPOINT_GAP; // 70
+  for (const count of [10, 25, 60, 90]) {
+    for (const seed of [1, 4242, 99]) {
+      const wps = expectWalk(drive(count, seed)).waypoints;
+      for (let i = 0; i < wps.length; i++) {
+        for (let j = i + 2; j < wps.length; j++) {
+          const d = Math.hypot(
+            wps[j].position.x - wps[i].position.x,
+            wps[j].position.y - wps[i].position.y
+          );
+          assert.ok(
+            d >= MIN - 1e-9,
+            `non-adjacent waypoints ${i + 1} & ${j + 1} are ${d.toFixed(2)}px apart (< ${MIN}) ` +
+              `for count=${count} seed=${seed}`
+          );
+        }
+      }
+    }
   }
 });
 

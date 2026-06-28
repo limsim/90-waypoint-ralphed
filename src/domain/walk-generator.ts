@@ -9,6 +9,7 @@ import { RandomSource } from "./random-source.js";
 import {
   turnLabelPoint,
   WAYPOINT_RADIUS,
+  MIN_WAYPOINT_GAP,
   MIN_PARALLEL_SEPARATION,
   MIN_SEGMENT_WAYPOINT_CLEARANCE,
   TURN_LABEL_CLEARANCE,
@@ -160,10 +161,16 @@ function newWaypointConflicts(
   const newSeg = segments[idx - 1];
   const newIsInterior = idx !== 0 && idx !== total - 1;
 
-  // (1) no two waypoint circles overlap: new waypoint vs every prior waypoint
+  // (1) waypoint-circle spacing vs every prior waypoint. The one adjacent predecessor (idx-1,
+  //     joined to the new waypoint by `newSeg`) keeps only the 50px hard-overlap floor; every
+  //     NON-adjacent prior waypoint keeps the larger 70px min-gap floor so unrelated parts of the
+  //     walk never appear to touch (ADR-0007). Mirrors layout-rules' noWaypointCirclesOverlap +
+  //     nonAdjacentWaypointsKeepMinGap.
   for (let j = 0; j < idx; j++) {
     const q = positions[j];
-    if (Math.hypot(p.x - q.x, p.y - q.y) < 2 * WAYPOINT_RADIUS) return true;
+    const minSeparation =
+      j === idx - 1 ? 2 * WAYPOINT_RADIUS : 2 * WAYPOINT_RADIUS + MIN_WAYPOINT_GAP;
+    if (Math.hypot(p.x - q.x, p.y - q.y) < minSeparation) return true;
   }
 
   // (2) no close parallel segments: new segment vs every prior segment

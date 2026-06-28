@@ -25,7 +25,21 @@ Started: Sat 27 Jun 2026 18:13:25 BST
 - Expanding `RandomSource` interface: search for `{ nextFloat:` stubs across tests/ whenever adding a new method — each stub must implement the full interface or tsc fails.
 - layout-rules adjacency model: `segments[i]` (0-indexed) is adjacent to `waypoints[i]` and
   `waypoints[i+1]`. Everything else is "non-adjacent". US-008 (Walk) and US-010 (generator) must use
-  this same index convention when calling the layout-rule predicates.
+  this same index convention when calling the layout-rule predicates. For WAYPOINT-pair adjacency
+  (US-023's `nonAdjacentWaypointsKeepMinGap`), waypoints are in sequence order so array-index
+  neighbours `j-i===1` are exactly the adjacent (sequence-gap-1) pairs — exempt; `j-i>1` is checked.
+- Adding a new layout constraint (US-023 pattern): (1) add the constant + a pure predicate to
+  `layout-rules.ts`, (2) push its `{rule:"..."}` in `checkLayout` — `Walk.create` composes
+  checkLayout so it throws on the new rule with NO change to walk.ts, (3) mirror it in the generator's
+  `newWaypointConflicts` (the incremental hot-loop check) so generation keeps producing walks the
+  invariant accepts (this flows through `canExtend` lookahead automatically), (4) PROVE the generator
+  mirror is load-bearing by temporarily reverting just that check (keep the invariant) and watching
+  `Walk.create` throw across the generator/use-case/clear tests (US-023: 31 failures), then revert via
+  a precise Edit + `npm run clean`. `assert.throws(fn, /rule-name/)` matches a SUBSTRING of the joined
+  violation message, so a fixture that ALSO trips the new rule does NOT break existing per-rule throw
+  tests — but isolate the new rule's own fixture (assert `v.length===1` / overlap NOT also tripped).
+  US-023 folded the non-adjacent 70px floor into the existing 50px circle loop: adjacent predecessor
+  (`j===idx-1`) keeps 50px, non-adjacent priors get `2*WAYPOINT_RADIUS+MIN_WAYPOINT_GAP` (70px).
 - `Walk.create(waypoints, bounds)` (src/domain/walk.ts) DERIVES segments from consecutive waypoints
   (`new Segment(wps[i].position, wps[i+1].position)`) — callers (US-010 generator) pass ONLY the placed
   waypoints + the generation region, never a separate segments array. This makes the layout-rules
@@ -2458,4 +2472,43 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     (two loads of the same `?seed=` URL look identical; the URL updating after a fresh Generate) remains
     the only outstanding item (AC8) — the headless harnesses + AC5 determinism node:test stand in for
     the functional ACs.
+---
+
+## 2026-06-28 - US-023 (Minimum gap between non-adjacent waypoints)
+- Implemented the non-adjacent waypoint min-gap (ADR-0007): non-adjacent (sequence gap > 1) waypoint
+  circles must keep MIN_WAYPOINT_GAP=20px of clear space between their edges (centres >= 70px =
+  2*WAYPOINT_RADIUS + MIN_WAYPOINT_GAP); adjacent (consecutive) waypoints stay exempt. Fixes the
+  reported #49/#54 tangent (touching) circles that read as a collision. The old 50px hard-overlap
+  floor is untouched and still applies to every pair.
+- Files changed:
+  - src/domain/layout-rules.ts: added `MIN_WAYPOINT_GAP = 20`; new pure predicate
+    `nonAdjacentWaypointsKeepMinGap(waypoints)`; wired `{rule:"non-adjacent-waypoints-too-close"}`
+    into `checkLayout` (right after waypoint-circles-overlap).
+  - src/domain/walk-generator.ts: imported MIN_WAYPOINT_GAP; folded the 70px non-adjacent floor into
+    `newWaypointConflicts` rule (1) — adjacent predecessor `j===idx-1` keeps 50px, non-adjacent
+    priors get 70px. Flows through `canExtend` (lookahead) for free. No change to walk.ts (it composes
+    checkLayout, so Walk.create now throws on the new rule automatically).
+  - tests/layout-rules.test.ts (+12), tests/walk.test.ts (+1 'rule 7' Walk.create throw),
+    tests/walk-generator.test.ts (+1 cross-seed/cross-count non-adjacent >= 70px assertion).
+  - scripts/ralph/prd.json: US-023 passes:true + notes. ADR-0007/ADR-0005-qualifier came in via the
+    docs commit (fast-forward, see below).
+- Quality gate: `npm run clean` + `npm run typecheck` clean; `npm test` -> 264 pass (was 252, +12);
+  verify:renderer / verify:controls (34) / verify:main (14) all green (the domain change drives them).
+- **Learnings for future iterations:**
+  - BRANCH STATE: the ralph branch (ralph/90-waypoint-map) was at US-022 (d22bdcc) and did NOT have
+    ADR-0007 or the US-023 PRD entry — those were committed on `main` (c8ae9d8) AFTER the PR #1 merge.
+    The story docs you're asked to implement may live only on main. `git merge-base --is-ancestor HEAD
+    main` confirmed a clean fast-forward (only the 3 docs files differed: prd.json, ADR-0007 new,
+    ADR-0005 +3 lines), so `git merge --ff-only main` brought the branch current before implementing.
+    Always check the branch actually CONTAINS the story spec before starting.
+  - A new spacing rule belongs in BOTH layout-rules (the Walk invariant) AND the generator's
+    `newWaypointConflicts` hot loop, or the generator will place walks the invariant rejects and
+    `Walk.create` throws. Proven load-bearing: dropping just the generator's 70px floor (keeping the
+    invariant) failed 31 tests — generator/use-case(generate-walk)/clear-walk all build real walks.
+  - `assert.throws(fn, /rule/)` matches a SUBSTRING of the joined violation message, so existing
+    per-rule throw fixtures survive a fixture that now ALSO trips the new rule (e.g. walk.test.ts's
+    rule-2 fixture has a non-adjacent WP1/WP4 pair at 52px). Verify this rather than assuming breakage.
+  - For an isolated new-rule fixture: keep all SEGMENTS clear of non-adjacent waypoints (>=35px) and
+    the close pair >=50px (so only the new 70px rule fires, not overlap/segment-clearance). A U-shape
+    folding its far end back near WP1 is a clean generator-shaped fixture for the Walk.create throw.
 ---

@@ -179,6 +179,20 @@ test("Walk.create: a turn label too close to a non-adjacent segment throws (rule
   assert.throws(() => Walk.create(wps, ROOM), /turn-label-too-close-to-segment/);
 });
 
+test("Walk.create: non-adjacent waypoints closer than 70px throw (rule 7, ADR-0007)", () => {
+  // A U-shape whose far end (WP5) folds back to ~62.5px from WP1 — a non-adjacent pair below the
+  // 70px min gap (but >= 50px, so the circles do not overlap). Every segment stays clear of
+  // non-adjacent waypoints, so only the new min-gap rule fires.
+  const wps = walkFrom([
+    [100, 400],
+    [100, 100],
+    [400, 100],
+    [400, 360],
+    [148, 360],
+  ]);
+  assert.throws(() => Walk.create(wps, ROOM), /non-adjacent-waypoints-too-close/);
+});
+
 test("Walk.create: a waypoint outside the bounds (30px padding) throws (rule 6)", () => {
   // The good geometry, but a region too tight for the 30px padding.
   const tight = new Bounds(90, 290, 210, 410); // padding 30 -> usable x[120,180] y[320,380]

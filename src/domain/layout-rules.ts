@@ -4,6 +4,13 @@ import { Segment } from "./segment.js";
 import { Bounds } from "./bounds.js";
 
 export const WAYPOINT_RADIUS = 25;
+/**
+ * Minimum *gap* (between circle edges) that two NON-adjacent waypoints must keep, so unrelated
+ * parts of the walk never appear to touch (ADR-0007). Adjacent waypoints are joined by a path
+ * segment and are exempt. Their centres must therefore sit at least
+ * `2 * WAYPOINT_RADIUS + MIN_WAYPOINT_GAP` (70px) apart.
+ */
+export const MIN_WAYPOINT_GAP = 20;
 export const MIN_PARALLEL_SEPARATION = 55;
 export const MIN_SEGMENT_WAYPOINT_CLEARANCE = 35;
 export const TURN_LABEL_OFFSET = 46;
@@ -33,6 +40,33 @@ export function noWaypointCirclesOverlap(waypoints: Waypoint[]): boolean {
           waypoints[j].position.y - waypoints[i].position.y
         ) <
         2 * WAYPOINT_RADIUS
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Every NON-adjacent waypoint pair (sequence gap > 1) keeps a minimum gap: their centres are at
+ * least `2 * WAYPOINT_RADIUS + MIN_WAYPOINT_GAP` (70px) apart, leaving `MIN_WAYPOINT_GAP` (20px)
+ * of clear space between their circle edges. ADJACENT (consecutive) waypoints are exempt — they
+ * are joined by a visible path segment and are *meant* to sit close (ADR-0007). Waypoints are
+ * ordered by sequence number, so array-index neighbours (`j - i === 1`) are the adjacent pairs;
+ * this is the same adjacency model the other layout rules use. The separate 50px hard-overlap
+ * floor (`noWaypointCirclesOverlap`) still applies to *every* pair, adjacent included.
+ */
+export function nonAdjacentWaypointsKeepMinGap(waypoints: Waypoint[]): boolean {
+  const minSeparation = 2 * WAYPOINT_RADIUS + MIN_WAYPOINT_GAP;
+  for (let i = 0; i < waypoints.length; i++) {
+    for (let j = i + 1; j < waypoints.length; j++) {
+      if (j - i === 1) continue; // adjacent — exempt
+      if (
+        Math.hypot(
+          waypoints[j].position.x - waypoints[i].position.x,
+          waypoints[j].position.y - waypoints[i].position.y
+        ) < minSeparation
       ) {
         return false;
       }
@@ -133,6 +167,8 @@ export function checkLayout(
 ): LayoutViolation[] {
   const v: LayoutViolation[] = [];
   if (!noWaypointCirclesOverlap(waypoints)) v.push({ rule: "waypoint-circles-overlap" });
+  if (!nonAdjacentWaypointsKeepMinGap(waypoints))
+    v.push({ rule: "non-adjacent-waypoints-too-close" });
   if (!noCloseParallelSegments(segments)) v.push({ rule: "parallel-segments-too-close" });
   if (!noSegmentCloseToNonAdjacentWaypoint(waypoints, segments))
     v.push({ rule: "segment-too-close-to-waypoint" });
