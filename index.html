@@ -5,6 +5,46 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>90 Waypoint Map</title>
     <style>
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+        margin: 1rem;
+        color: #222;
+      }
+
+      /*
+       * Control surface (US-016). The DOM controls adapter (src/adapters/dom-controls.ts) wires
+       * these elements by id (see CONTROL_IDS) to the GenerateWalk / ClearWalk use cases. The markup
+       * and styling live here; all behaviour lives in the adapter.
+       */
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+        margin-bottom: 0.75rem;
+      }
+      .controls label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+      }
+      .controls button {
+        cursor: pointer;
+      }
+      .controls input[type="number"] {
+        width: 4rem;
+      }
+
+      /*
+       * The canvas + loading overlay share a positioned wrapper so the overlay can sit exactly over
+       * the canvas. `display: inline-block` keeps the wrapper sized to the canvas element.
+       */
+      .canvas-wrap {
+        position: relative;
+        display: inline-block;
+        max-width: 100%;
+      }
+
       /*
        * Viewport fit (US-015 / docs/adr/0005). The canvas backing store is capped at A4 (794×1123),
        * but on a narrower viewport the ELEMENT is CSS-scaled down so it never overflows horizontally.
@@ -15,14 +55,74 @@
         display: block;
         max-width: 100%;
         height: auto;
+        border: 1px solid #ddd;
+      }
+
+      /*
+       * Loading overlay (US-016). Hidden by default; the DOM controls adapter sets
+       * `style.display = "flex"` during generation and back to "none" in its finally. The spinner is a
+       * pure-CSS animation, so once GenerateWalk frees the event loop between batches the browser can
+       * paint and animate it without the synchronous generation blocking it.
+       */
+      #loading-overlay {
+        position: absolute;
+        inset: 0;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        background: rgba(255, 255, 255, 0.8);
+        font: 600 1rem/1.2 Arial, Helvetica, sans-serif;
+        color: #222;
+      }
+      .spinner {
+        width: 48px;
+        height: 48px;
+        border: 5px solid #d9d9d9;
+        border-top-color: #222;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
       }
     </style>
   </head>
   <body>
     <main>
       <h1>90 Waypoint Map</h1>
-      <!-- A4 at 96 PPI (794x1123); the renderer adapter (US-013+) draws here. -->
-      <canvas id="walk-canvas" width="794" height="1123"></canvas>
+
+      <!-- Control surface (US-016). Wired by id in src/adapters/dom-controls.ts. -->
+      <div class="controls">
+        <button id="generate-button" type="button">Generate Walk</button>
+        <button id="clear-button" type="button">Clear</button>
+        <label>
+          Waypoints
+          <input id="waypoint-count" type="number" min="10" max="90" step="1" value="90" />
+        </label>
+        <label>
+          <input id="toggle-wildcards" type="checkbox" checked />
+          Show Wildcards
+        </label>
+        <label>
+          <input id="toggle-turns" type="checkbox" checked />
+          Show Turns
+        </label>
+        <button id="print-button" type="button">Print</button>
+      </div>
+
+      <div class="canvas-wrap">
+        <!-- A4 at 96 PPI (794x1123); the renderer adapter (US-013+) draws here. -->
+        <canvas id="walk-canvas" width="794" height="1123"></canvas>
+        <!-- Shown over the canvas during generation (US-016). -->
+        <div id="loading-overlay" role="status" aria-live="polite">
+          <div class="spinner" aria-hidden="true"></div>
+          <span>Generating...</span>
+        </div>
+      </div>
     </main>
     <!-- Compiled ES module entry. `npm run build` mirrors src/ under dist/, so
          src/main.ts is emitted to dist/src/main.js. -->

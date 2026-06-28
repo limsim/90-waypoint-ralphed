@@ -11,6 +11,7 @@
     "clean": "rm -rf dist",
     "test": "tsc -b && node --test \"dist/tests/**/*.test.js\"",
     "verify:renderer": "tsc -b && node scripts/verify-renderer.mjs",
+    "verify:controls": "tsc -b && node scripts/verify-controls.mjs",
     "serve": "node scripts/serve.mjs"
   },
   "devDependencies": {

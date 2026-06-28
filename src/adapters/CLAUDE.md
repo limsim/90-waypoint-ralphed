@@ -22,6 +22,56 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   as canvas would, so the SVG is derived from the real output, not a reimplementation) and rasterize
   with `qlmanage -t -s 1123 -o <dir> file.svg` (macOS QuickLook; no rsvg/imagemagick needed).
 
+## dom-controls.ts (US-016)
+- The INPUT boundary of the hexagon: owns all interactive chrome (Generate / Clear / Print buttons,
+  the waypoint-count input, the Show Wildcards / Show Turns toggles) and translates gestures into
+  `GenerateWalk` / `ClearWalk` calls + `Renderer.draw` redraws. All DOM access lives here.
+- **Split for testability**: the constructor takes EXPLICIT element references
+  (`DomControlsElements`); the static `DomControls.fromDocument(deps, doc = document)` is the ONLY
+  `document`-touching path (it resolves each element by `CONTROL_IDS` and THROWS if any is missing,
+  so a markup mismatch fails loudly at startup). That split lets the headless harness construct
+  `DomControls` with fake elements directly — no fake `document` needed except for the `fromDocument`
+  test itself (pass a `{ getElementById }` stub). Element ids are exported as `CONTROL_IDS` and MUST
+  match the ids in index.html.
+- **Markup + styling live in index.html, behaviour lives here.** index.html holds the control
+  `<div class="controls">`, the `.canvas-wrap` (positioned so the overlay sits over the canvas), the
+  `#loading-overlay` (spinner + "Generating..."), and the spinner `@keyframes` CSS. The adapter only
+  shows/hides the overlay (`loadingOverlay.style.display = "flex" | "none"`) and toggles
+  `generateButton.disabled`. The spinner is a PURE-CSS animation — it animates once `GenerateWalk`
+  frees the event loop between batches; the adapter never drives the animation.
+- **Overlay timing**: `setBusy(true)` runs SYNCHRONOUSLY at the top of `generate()` BEFORE the
+  `await generateWalk.execute(...)`, so the overlay/disabled state are committed before the event loop
+  is ceded and the browser paints them; `setBusy(false)` runs in a `finally` so they are ALWAYS
+  restored — on success, on the bounded failure signal (`ok:false`), and on a thrown error. `generate`
+  rethrows; the click listener owns the rejection (`.catch(console.error)`) so a stray failure can't
+  become an unhandled promise rejection.
+- **Current-walk view state**: per ADR-0003 the domain holds no "current walk", but the two display
+  toggles must redraw the SAME walk with new options WITHOUT regenerating it — so this adapter keeps a
+  `currentWalk: Walk | null` (a pure UI/view concern). A toggle `change` → `renderer.draw(currentWalk,
+  options)`; a fresh Generate replaces it; Clear nulls it (so toggles become a no-op until the next
+  Generate). Do NOT push this state into the domain.
+- **Seed-agnostic**: a fresh `RandomSource` is produced per generation via the injected
+  `createRandom: () => RandomSource` factory (NOT a single shared instance — each Generate must start a
+  fresh deterministic stream, which US-022's single-seed reproducibility depends on). US-021 supplies
+  the entropy-seeded factory; US-022 layers `?seed=` on top — neither changes this class.
+- **Count clamping**: `readCount()` parses the input and clamps to `[10, 90]`, falling back to 90 on a
+  blank/non-numeric value, so the generator always gets a valid integer count (its guard rejects
+  non-integer / `< 2`). The `<input min="10" max="90" value="90">` attributes mirror these bounds.
+- **Headless gate** (`npm run verify:controls`, `scripts/verify-controls.mjs`): adapters aren't covered
+  by `npm test` (tsconfig.test references core only), so this is the regression gate. It drives a REAL
+  `GenerateWalk`/`ClearWalk` through `DomControls` with fake elements + a recording fake `Renderer`,
+  and asserts: clear-then-draw on Generate; overlay+disabled DURING (asserted synchronously, before the
+  await) and restored after; Clear clears; toggles redraw the SAME walk object with independent options
+  (and are a no-op with no current walk); the count input drives + clamps; Print calls `window.print`;
+  the overlay restores in `finally` on the `ok:false` failure signal AND on a thrown error; and
+  `fromDocument` resolves by id + throws on a missing element. **Extend it** when US-017 (tooltip/hover)
+  and US-020 (failure error overlay) add to this adapter. NOTE: `window.print` is a global — the harness
+  stubs `globalThis.window` around the print check; the adapter reads `window` at call time.
+- CAVEAT (carried from US-013/14/15): a LIVE browser screenshot for human sign-off is still pending —
+  no browser/Playwright MCP in this env, and the controls only become interactive once US-021 wires
+  main.ts (composition root + auto-generate-on-load). The headless harness stands in for the functional
+  ACs; the screenshot is a review gate, not a code defect.
+
 ## canvas-renderer.ts (US-013+)
 - Implements the `Renderer` port (`src/application/renderer-port.ts`): `draw(walk, options)` + `clear()`.
 - Imports `WAYPOINT_RADIUS` from `domain/layout-rules.js` so the DRAWN circle radius is the SAME

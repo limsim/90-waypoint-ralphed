@@ -197,6 +197,32 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   binding axis fills its A4 edge EXACTLY (`contentDim*scale === A4 dim`) and returns its `bind`, and a
   coverage gate asserts the downscale set spans BOTH "WIDTH" and "HEIGHT". To find a height-bound large
   walk: scan seeds for `contentH/contentW > A4_H/A4_W` (1123/794 ≈ 1.414).
+- DOM-controls adapter (`src/adapters/dom-controls.ts`, US-016) is the INPUT boundary: it wires the
+  GenerateWalk + ClearWalk use cases and the Renderer port to the page chrome. Split for testability —
+  the CONSTRUCTOR takes EXPLICIT element refs (`DomControlsElements`); the static
+  `DomControls.fromDocument(deps, doc = document)` is the ONLY `document`-touching path (resolves each
+  element by the exported `CONTROL_IDS` map, throws on any miss). The MARKUP + styling (controls,
+  `.canvas-wrap`, `#loading-overlay` spinner, `@keyframes`) live in index.html; the adapter only
+  flips `loadingOverlay.style.display` + `generateButton.disabled`. The spinner is pure CSS.
+- The DOM-controls overlay is shown via `setBusy(true)` SYNCHRONOUSLY before `await
+  generateWalk.execute(...)` (so it paints once the event loop is freed) and restored via
+  `setBusy(false)` in a `finally` — on success, on the `ok:false` failure signal, AND on a throw.
+  `generate()` rethrows; the click listener owns the rejection (`.catch(console.error)`).
+- DOM-controls holds a `currentWalk: Walk | null` so the Show Wildcards / Show Turns toggles can
+  redraw the SAME walk with new `DisplayOptions` WITHOUT regenerating (a pure UI/view concern, NOT
+  domain state per ADR-0003). A fresh Generate replaces it; Clear nulls it (toggles then no-op).
+  Inject `createRandom: () => RandomSource` (a FACTORY, fresh per generation) to stay seed-agnostic —
+  US-021 supplies the entropy default, US-022 the `?seed=` source; neither touches DomControls.
+- Verify a DOM-CONTROLS adapter headlessly the same way as the renderer (adapters aren't in
+  `npm test`): `npm run verify:controls` (`scripts/verify-controls.mjs`) drives a REAL
+  GenerateWalk/ClearWalk through DomControls with hand-rolled fake elements
+  (`addEventListener`+`dispatch`, plus `style`/`disabled`/`checked`/`value` props) and a recording
+  fake `Renderer`. Assert in-flight overlay/disabled state SYNCHRONOUSLY (before awaiting the returned
+  promise — setBusy runs before the first await); prove "event loop free during generation" with a
+  stub `generateWalk.execute` that suspends across TWO macrotask hops and a `setImmediate` queued
+  between them (a real count=90 generation yields too few times to observe reliably — that property is
+  GenerateWalk's, proven in US-011). Stub `globalThis.window = { print }` around the Print check. EXTEND
+  this gate when US-017/US-020 add to dom-controls.ts.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1284,4 +1310,49 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - count=30 seed=17 is the canonical HEIGHT-bound downscale fixture; count=90 seed=4242 is WIDTH-bound.
   - The binding axis is filled EXACTLY to its A4 edge after the fit (`contentDim*scale === A4 dim`) — the
     sharpest single assertion that the correct term drove the uniform scale.
+---
+
+## 2026-06-28 - US-016 (DOM controls driving adapter)
+- Implemented the DOM control surface adapter wiring the GenerateWalk + ClearWalk use cases.
+- Files changed:
+  - src/adapters/dom-controls.ts (NEW): `DomControls` — input-boundary adapter. Constructor takes
+    explicit `DomControlsElements`; static `fromDocument(deps, doc=document)` resolves them by the
+    exported `CONTROL_IDS` and throws on a missing element. `generate()`: setBusy(true) (disable
+    Generate + show overlay) synchronously, clearWalk.execute(), `await generateWalk.execute(count,
+    createRandom())`, draw on ok:true (canvas left cleared on ok:false for US-020), setBusy(false) in
+    a `finally`; rethrows (listener owns the rejection). `clear()`, `print()` (window.print), toggle
+    `change` → redraw the held `currentWalk` with live `{showWildcards, showTurns}` (no regenerate).
+    `readCount()` clamps the input to [10,90] (blank/NaN→90). Injected `createRandom` factory keeps it
+    seed-agnostic.
+  - index.html: added the `.controls` row (Generate / Clear buttons, #waypoint-count number input
+    min=10/max=90/value=90, #toggle-wildcards + #toggle-turns checkboxes both `checked`, Print button),
+    wrapped the canvas in `.canvas-wrap` (position:relative) with a `#loading-overlay` (spinner +
+    'Generating...'), and added the spinner `@keyframes` + control CSS. main.ts left for US-021.
+  - scripts/verify-controls.mjs (NEW) + package.json `verify:controls` script: headless gate, 11 checks.
+  - src/adapters/CLAUDE.md: new "dom-controls.ts (US-016)" section. scripts/ralph/prd.json: US-016
+    passes:true + notes. scripts/ralph/progress.txt: this entry + 5 Codebase Patterns bullets.
+- Verified: `npm run clean` + `npm run typecheck` (tsc -b) clean; `npm test` -> 243 pass, 0 fail (no
+  regressions — adapters carry no committed node:tests by design); `npm run verify:renderer` all pass;
+  `npm run verify:controls` -> all 11 checks pass.
+- CAVEAT: no browser/Playwright MCP in this environment, so the AC's live screenshots could not be
+  captured. The headless verify:controls harness (real use cases + fake DOM + recording renderer)
+  stands in for every FUNCTIONAL AC; the controls become interactive in a browser once US-021 wires
+  main.ts (composition root + auto-generate-on-load) and the page is served. The live screenshot is a
+  human review gate, not a code defect — marked passes:true on that basis (matches US-013/14/15).
+- **Learnings for future iterations:**
+  - Keep main.ts wiring for US-021 — US-016 is JUST the dom-controls adapter + index.html markup. The
+    adapter depends on the use cases/ports/createRandom factory via constructor injection, so US-021's
+    composition root only has to `new DomControls.fromDocument({...})` and trigger the first generate.
+  - The "overlay shown DURING generation" AC is verified by asserting the overlay/disabled state
+    SYNCHRONOUSLY right after calling `generate()` (setBusy runs before the first await) and again
+    after awaiting the returned promise (finally restored it) — no need to observe a real mid-flight
+    macrotask boundary for that. The separate "event loop genuinely free" property is GenerateWalk's
+    (US-011) and, at the DomControls level, is best shown with a stub execute that suspends across two
+    macrotask hops (a real count=90 generation yields too few times — once per re-roll + per 50
+    attempts — to reliably interleave external work).
+  - On the bounded `ok:false` failure signal, generate() draws NOTHING (canvas stays cleared) and only
+    restores the controls — US-020 will layer the error overlay on top. Don't draw a partial/empty walk.
+  - DomControls holds `currentWalk` purely so the toggles can redraw without regenerating; this is the
+    first place UI/view state is held (ADR-0003 keeps the domain stateless). US-017's tooltip/hover will
+    also need the current walk for hit-testing — read it from this same adapter, don't add domain state.
 ---
