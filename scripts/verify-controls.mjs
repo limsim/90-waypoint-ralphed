@@ -622,6 +622,33 @@ function ok(label) {
     "print caps the canvas height (max-height) so the legend fits on the same A4 page"
   );
 
+  // ...but the bare "a cap exists" check above passes for ANY value — `max-height: 999mm`, or dropping
+  // the `@page` margin, would still push the legend onto page 2 yet stay green. The story's headline
+  // AC ("a single A4 page") is an ARITHMETIC claim, so verify the arithmetic from the real numbers:
+  // A4 portrait is 297mm tall; `@page { margin: Nmm }` leaves a printable height of 297 - 2N; the
+  // canvas cap + the legend's top gap + the legend's own rendered height must all fit inside it. We
+  // assert the INEQUALITY (not specific values), so any correct cap satisfies it and only a
+  // page-breaking one trips it. LEGEND_RESERVE_MM is a generous lower bound on the legend's height
+  // (one flex row of 20px ≈ 5.3mm swatches + line height) so a legitimate cap tweak never spuriously
+  // fails — it bites only when the cap genuinely leaves no room for the legend on the same sheet.
+  const A4_HEIGHT_MM = 297;
+  const LEGEND_RESERVE_MM = 10;
+  const mmOf = (rule, prop) => {
+    if (!rule) return null;
+    const m = rule.match(new RegExp(`(?<![-\\w])${prop}(?![-\\w])\\s*:\\s*(\\d+(?:\\.\\d+)?)mm`, "i"));
+    return m ? parseFloat(m[1]) : null;
+  };
+  const pageMarginMm = mmOf(printBlock.match(/@page[^{]*\{[^}]*\}/i)?.[0] ?? null, "margin");
+  const canvasMaxMm = mmOf(ruleFor("(?<![\\w.#-])canvas"), "max-height");
+  const legendTopMm = mmOf(ruleFor(escapeRe(".legend")), "margin-top") ?? 0;
+  assert.ok(pageMarginMm !== null, "@page margin is given in mm (it drives the A4 printable height)");
+  assert.ok(canvasMaxMm !== null, "canvas max-height is given in mm (it drives the single-page fit)");
+  const printableMm = A4_HEIGHT_MM - 2 * pageMarginMm;
+  assert.ok(
+    canvasMaxMm + legendTopMm + LEGEND_RESERVE_MM <= printableMm,
+    `canvas cap (${canvasMaxMm}mm) + legend gap (${legendTopMm}mm) + legend (~${LEGEND_RESERVE_MM}mm) <= A4 printable height (${printableMm}mm @ ${pageMarginMm}mm margin) — fits one A4 page`
+  );
+
   // The legend swatches are CSS BACKGROUND colours (the Start/End swatch is a pure `background:
   // #000000` fill with no border). Browsers default to `print-color-adjust: economy`, which drops
   // background colours when printing — so without `print-color-adjust: exact` the black Start/End

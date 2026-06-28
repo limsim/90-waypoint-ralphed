@@ -357,6 +357,18 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   `(?<!-)print-color-adjust:exact` lookbehind (the `-webkit-` prefix alone must NOT satisfy it),
   proven to bite by dropping the standard line. Any future printed background colour needs the same;
   a canvas bitmap is foreground content and prints regardless.
+  GOTCHA (single-A4-page is ARITHMETIC, US-019 refinement): "fits on one A4 page" is the story's
+  headline AC but a bare `canvas { max-height: <any> }` existence check verifies NOTHING — `max-height:
+  999mm` (or dropping the `@page` margin) still pushes the legend to page 2 yet keeps the gate green.
+  verify:controls item 7 now PARSES the real numbers and asserts the inequality the single-page
+  guarantee rests on: A4 portrait = 297mm tall; `@page { margin: Nmm }` leaves a printable height of
+  297 - 2N; assert `canvasMaxMm + legendMarginTopMm + LEGEND_RESERVE_MM(10) <= printableMm`
+  (245 + 6 + 10 = 261 <= 273 @ 12mm margin, 12mm slack). It's an INEQUALITY not a pinned value, so any
+  correct cap passes and only a page-breaking one trips it; LEGEND_RESERVE_MM is a generous lower
+  bound on the legend's own rendered height (one flex row of 20px ≈ 5.3mm swatches + line height) so a
+  legitimate cap tweak never fails spuriously. Helper `mmOf(rule, prop)` parses `<prop>: <n>mm` with
+  `(?<![-\w])prop(?![-\w])` boundaries so "margin" doesn't clash with "margin-top". Proven to bite:
+  max-height 245mm->280mm fired the AssertionError (296 > 273); reverted.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1869,4 +1881,44 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - For a markup/CSS-only story, the highest-value refinement is auditing actual RENDER/PRINT semantics
     (here: what browsers do to backgrounds at print time), not just adding more structural regex checks
     — the existing gate proved the rules were PRESENT but said nothing about whether they'd print right.
+---
+
+## 2026-06-28 - US-019 (Print stylesheet) — REFINEMENT
+- US-019 already passed; re-verified all acceptance criteria green and the print CSS in index.html
+  (the @media print block) against the AC. Refinement is verify:controls-only, no impl change — the
+  print stylesheet itself was already correct.
+- GAP CLOSED: item 7's "single A4 page" coverage was only QUALITATIVE — it asserted a `canvas
+  { max-height }` cap EXISTS but accepted any value, so `max-height: 999mm` (or dropping the `@page`
+  margin) would push the legend onto page 2 while the gate stayed green. "Fits on one A4 page" is the
+  story's HEADLINE AC and it's an arithmetic claim, so the gate now PARSES the real numbers and asserts
+  the inequality the single-page guarantee rests on.
+- WHAT WAS ADDED (scripts/verify-controls.mjs item 7): parse `@page` margin, `canvas` max-height, and
+  `.legend` margin-top (all in mm via a boundary-anchored `mmOf(rule, prop)` helper so "margin" doesn't
+  clash with "margin-top"/"max-height"), compute the A4 printable height (297 - 2*margin = 273mm @ 12mm
+  margin), and assert `canvasMaxMm + legendTopMm + LEGEND_RESERVE_MM(10) <= printableMm`
+  (245 + 6 + 10 = 261 <= 273, 12mm slack). Asserted as an INEQUALITY (not a pinned value) so any
+  correct cap passes and only a page-breaking one trips it; LEGEND_RESERVE_MM is a generous lower bound
+  on the legend's own rendered height (one flex row of 20px ≈ 5.3mm swatches + line height) so a
+  legitimate cap tweak never fails spuriously. Also hard-asserts the `@page` margin and canvas
+  max-height are present and in mm (they drive the arithmetic).
+- PROVEN TO BITE then reverted: bumping the canvas cap 245mm->280mm (via sed on index.html) fired the
+  AssertionError "canvas cap (280mm) + legend gap (6mm) + legend (~10mm) <= A4 printable height
+  (273mm @ 12mm margin)" (296 > 273); restored index.html from a backup -> 24/24 green.
+- VERIFIED: npm run clean; tsc -b clean (typecheck); npm test 243 pass (no regressions — print CSS is
+  markup-only, no test imports it); npm run verify:renderer green; npm run verify:controls 24/24.
+- CAVEAT (carried from US-013..018): no browser/Playwright MCP in this env, so the LIVE print-preview
+  screenshot for human sign-off remains pending; the @media print rules are static CSS and apply
+  independently of the JS (the canvas only fills with a walk once US-021 wires main.ts). The
+  verify:controls item-7 markup+arithmetic gate stands in for the functional AC.
+- Files changed: scripts/verify-controls.mjs (item-7 single-A4-page arithmetic assertion),
+  scripts/ralph/progress.txt (this entry + Codebase Patterns gotcha).
+- **Learnings for future iterations:**
+  - An AC that is fundamentally NUMERIC ("fits on one A4 page") deserves a numeric gate, not a presence
+    check. Parsing the actual CSS values and asserting the governing INEQUALITY catches page-breaking
+    regressions a `property exists` regex cannot, without pinning to fragile exact values.
+  - Parse `<prop>: <n>mm` with `(?<![-\w])prop(?![-\w])` boundaries so a shorter property name isn't a
+    false prefix/suffix match of a longer one ("margin" vs "margin-top", "height" vs "max-height").
+  - To prove a CSS arithmetic gate bites on an uncommitted index.html: back it up (`cp`), `sed` the
+    value to a page-breaking one, run the gate (expect fail), then restore from the backup — do NOT
+    `git checkout` (would wipe other uncommitted story work, per the earlier US-017 GOTCHA).
 ---
