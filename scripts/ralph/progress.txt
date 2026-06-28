@@ -307,6 +307,16 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   their true centre — while every `border 0` case still passes). GOTCHA proving it bites: the CENTER of
   the canvas maps exactly even WITHOUT the fix (symmetric border cancels), so the proof needs OFF-CENTRE
   waypoints on a CSS-downscaled element — a click at the middle would pass either way.
+- The legend (US-018) is STATIC DOM/HTML+CSS in index.html ONLY — NOT canvas-painted and NOT wired by
+  the dom-controls adapter (no TS change). It's a `<ul id="legend" class="legend">` placed AFTER the
+  `.canvas-wrap` div ("below the canvas") with three <li> swatch+label entries. Swatch colours MIRROR
+  the canvas-renderer.ts constants (terminal #000000 fill; waypoint #ffffff fill + #000000 border;
+  wildcard #ff8c00 orange ring) — keep them in sync (a CSS comment flags this). Because no test code
+  imports markup, its ONLY regression gate is `verify:controls`' index.html-markup block (item 6): it
+  reads the real index.html and asserts the legend exists, sits after the canvas in document order,
+  carries all three AC labels, and its swatch CSS has the golden hex colours — golden values HARD-CODED
+  (not imported) so a drift in EITHER the legend CSS or the renderer constants fails the gate. US-019's
+  print stylesheet must KEEP #legend visible while hiding the other chrome (controls/overlay/tooltip).
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1645,4 +1655,39 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     needed the bordered-canvas fake. dom-controls' tooltip POSITIONING (clientX - rect.left + offset,
     relative to the canvas-wrap) is intentionally NOT border-corrected: it only needs to land near the
     click (already offset 12px), not invert to a generation coordinate.
+---
+
+## 2026-06-28 - US-018 (Legend (DOM/HTML))
+- Implemented the legend as static DOM/HTML+CSS in index.html — a `<ul id="legend" class="legend">`
+  placed BELOW the canvas (after the .canvas-wrap div, still inside <main>) with three <li> entries,
+  each a decorative aria-hidden swatch <span> + label text:
+    - Start / End      -> .swatch-terminal  (black #000000 filled circle)
+    - Waypoint         -> .swatch-waypoint  (white #ffffff fill + 2px #000000 border)
+    - Wildcard — walker goes straight -> .swatch-wildcard (transparent fill + 3px #ff8c00 orange ring)
+  Swatches are 20px circles (.legend .swatch { border-radius:50%; box-sizing:border-box }). The swatch
+  colours mirror the canvas-renderer.ts constants (TERMINAL_FILL / WAYPOINT_FILL / WAYPOINT_BORDER /
+  WILDCARD_RING_COLOUR); a CSS comment flags the sync requirement. NO TypeScript/adapter change — the
+  legend is static markup, not canvas-painted, and the DOM-controls adapter never references it.
+- Files changed:
+  - index.html (legend CSS block + the <ul id="legend"> markup below the canvas)
+  - scripts/verify-controls.mjs (item 6 in the index.html-markup block: legend regression gate; 22->23)
+  - src/adapters/CLAUDE.md is NOT changed — the legend isn't an adapter concern; the reusable note went
+    into progress.txt Codebase Patterns instead.
+- Verified: `npm run clean` + tsc -b clean (typecheck); `npm test` 243 pass (no regressions — markup is
+  not imported by any test); `npm run verify:renderer` green; `npm run verify:controls` 23/23 (the new
+  legend check ran: "✓ Legend (US-018): DOM/HTML below the canvas, three entries, swatches mirror the
+  canvas colours"). PROVEN the gate bites: temporarily changing the wildcard swatch #ff8c00 -> #123456
+  fired AssertionError "Wildcard swatch is an orange ring (#ff8c00 border)"; reverted -> 23/23 again.
+  VISUAL evidence via qlmanage (no browser MCP in this env): rasterized a self-contained legend snippet
+  (canvas placeholder above, the three entries below) — confirms black filled circle / white-black-
+  bordered circle / orange ring with the correct labels, laid out below the canvas.
+- **Learnings for future iterations:**
+  - The legend is the FIRST purely-static-markup story: there is no TS to typecheck-gate it and no
+    node:test can reach markup, so verify:controls' index.html-reading block is its only automated guard.
+    When adding any static markup with an AC, extend that block (golden values hard-coded, not imported).
+  - Keep the legend swatch colours in sync with canvas-renderer.ts colour constants — the gate enforces
+    the golden values on BOTH sides (drift in either fails), but the source of truth is the renderer.
+  - LIVE browser screenshot for human sign-off still pending (no MCP); the legend renders independently
+    of the JS (it's static markup), so it shows even before US-021 wires main.ts. US-019 (print
+    stylesheet) must KEEP #legend on the printed page while hiding controls/overlay/tooltip.
 ---

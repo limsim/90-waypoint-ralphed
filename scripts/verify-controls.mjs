@@ -500,6 +500,31 @@ function ok(label) {
   assert.ok(/#waypoint-tooltip\s*\{[^}]*pointer-events:\s*none/i.test(html), "tooltip is non-interactive (pointer-events: none)");
   assert.ok(/#waypoint-tooltip\s*\{[^}]*white-space:\s*pre-line/i.test(html), "tooltip renders multi-line text (white-space: pre-line)");
   ok("index.html markup matches the adapter contract (ids, input range/default, toggles, overlay, tooltip)");
+
+  // 6. Legend (US-018): a DOM/HTML legend BELOW the canvas (not canvas-painted) with three entries —
+  //    Start/End, Waypoint, Wildcard — whose swatches MIRROR the canvas symbol colours. There is no
+  //    other gate for it (the legend is static markup; the adapter never touches it), so this is its
+  //    regression check. Golden colours are HARD-CODED here, NOT imported, so a drift in either the
+  //    canvas-renderer constants OR the legend CSS fails the gate. "Below the canvas" is document order.
+  assert.ok(tagWithId("legend"), "index.html has a #legend element");
+  const canvasAt = html.search(new RegExp(`\\bid=["']${CONTROL_IDS.canvas}["']`, "i"));
+  const legendAt = html.search(/\bid=["']legend["']/i);
+  assert.ok(canvasAt !== -1 && legendAt > canvasAt, "legend is below the canvas (after it in document order)");
+
+  // Three entries with their AC labels.
+  for (const label of ["Start / End", "Waypoint", "Wildcard"]) {
+    assert.ok(html.includes(label), `legend has the "${label}" entry`);
+  }
+  assert.ok(/walker goes straight/i.test(html), 'wildcard entry explains "walker goes straight"');
+
+  // Swatches mirror the canvas (canvas-renderer.ts): terminal black fill; waypoint white fill + black
+  // border; wildcard orange ring. Golden hex values hard-coded.
+  assert.ok(/swatch-terminal\s*\{[^}]*background:\s*#000000/i.test(html), "Start/End swatch is a black filled circle (#000000)");
+  assert.ok(/swatch-waypoint\s*\{[^}]*background:\s*#ffffff/i.test(html), "Waypoint swatch is white-filled (#ffffff)");
+  assert.ok(/swatch-waypoint\s*\{[^}]*border:[^;}]*#000000/i.test(html), "Waypoint swatch has a black border (#000000)");
+  assert.ok(/swatch-wildcard\s*\{[^}]*border:[^;}]*#ff8c00/i.test(html), "Wildcard swatch is an orange ring (#ff8c00 border)");
+  assert.ok(/\.legend\s+\.swatch\s*\{[^}]*border-radius:\s*50%/i.test(html), "legend swatches are circular (border-radius: 50%)");
+  ok("Legend (US-018): DOM/HTML below the canvas, three entries, swatches mirror the canvas colours");
 }
 
 // ── US-017: clicking a waypoint shows the DOM-overlay tooltip with number / turn / distance ──

@@ -113,6 +113,50 @@
         white-space: pre-line;
         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
       }
+
+      /*
+       * Legend (US-018). A DOM/HTML legend below the canvas — NOT painted on the canvas — explaining
+       * the three waypoint symbols. The swatch colours MIRROR the canvas renderer
+       * (src/adapters/canvas-renderer.ts): terminals are a black filled circle (TERMINAL_FILL
+       * #000000), ordinary waypoints a white circle with a black border (WAYPOINT_FILL #ffffff /
+       * WAYPOINT_BORDER #000000), and a wildcard an orange ring (WILDCARD_RING_COLOUR #ff8c00). Keep
+       * these in sync with those constants. US-019's print stylesheet keeps this legend on the page.
+       */
+      .legend {
+        list-style: none;
+        margin: 0.75rem 0 0;
+        padding: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.25rem;
+        font-size: 0.9rem;
+      }
+      .legend li {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .legend .swatch {
+        width: 20px;
+        height: 20px;
+        flex: none;
+        border-radius: 50%;
+        box-sizing: border-box;
+      }
+      /* Start / End: a black filled circle (canvas terminal fill). */
+      .legend .swatch-terminal {
+        background: #000000;
+      }
+      /* Waypoint: a white filled circle with a black border (canvas interior style, 2px stroke). */
+      .legend .swatch-waypoint {
+        background: #ffffff;
+        border: 2px solid #000000;
+      }
+      /* Wildcard: an orange ring — transparent inside, 3px orange stroke (canvas wildcard ring). */
+      .legend .swatch-wildcard {
+        background: transparent;
+        border: 3px solid #ff8c00;
+      }
     </style>
   </head>
   <body>
@@ -149,6 +193,23 @@
         <!-- DOM-overlay tooltip for a clicked waypoint (US-017); filled + positioned by the adapter. -->
         <div id="waypoint-tooltip" role="status" aria-live="polite"></div>
       </div>
+
+      <!-- Legend (US-018). DOM/HTML below the canvas (not canvas-painted); swatches mirror the canvas
+           symbol colours. Decorative swatches are aria-hidden; the text carries the meaning. -->
+      <ul id="legend" class="legend" aria-label="Map legend">
+        <li>
+          <span class="swatch swatch-terminal" aria-hidden="true"></span>
+          Start / End
+        </li>
+        <li>
+          <span class="swatch swatch-waypoint" aria-hidden="true"></span>
+          Waypoint
+        </li>
+        <li>
+          <span class="swatch swatch-wildcard" aria-hidden="true"></span>
+          Wildcard — walker goes straight
+        </li>
+      </ul>
     </main>
     <!-- Compiled ES module entry. `npm run build` mirrors src/ under dist/, so
          src/main.ts is emitted to dist/src/main.js. -->
