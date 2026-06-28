@@ -436,6 +436,16 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   is asserted with `>=` counts (≥90 arcs/fillTexts for a count=90 walk) so it's independent of the
   entropy-driven walk SHAPE — only the COUNTS (90 circles, 90 numbers) are deterministic — wrapped in a
   `withTimeout(5s)` so an unbounded-generation regression trips a check rather than hanging the gate.
+- GOTCHA (verify:main entropy gap): the auto-generate AC2 check counts CIRCLES only, so it is shape-
+  independent and a fixed-seed regression of the entropy default (`createRandom` → `new SeededRandom(0)`)
+  draws the IDENTICAL walk every load yet still passes it. AC1's "entropy-seeded by default" therefore
+  needs its OWN guard: (a) the factory-isolation check must compare a short PREFIX of two `createRandom()`
+  streams (`notDeepEqual`), not just assert distinct instances (a fixed seed yields distinct instances but
+  identical streams); (b) an end-to-end check fingerprints the renderer geometry (moveTo/lineTo/arc args)
+  from TWO `bootstrap()` loads and asserts they DIFFER — proving the entropy factory is wired through the
+  whole composition. Non-flaky: two entropy-seeded count=90 walks collide with ~0 probability (different
+  turn sequence AND 88 independent segment lengths); only a fixed seed makes them equal. Same shape works
+  for any "random by default" composition-root AC.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -2169,4 +2179,37 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     Reuse `verify:main`'s fake-document + real-pipeline shape (and the determinism check belongs in
     `tests/` since seeding is deterministic — a seeded `SeededRandom` yielding an identical Walk is
     core-testable, unlike the entropy default).
+---
+
+## 2026-06-28 05:10 BST - US-021 (Composition root) — REFINEMENT (verify:main only, no impl change)
+- US-021 already passed; main.ts implementation was already correct. Closed the ONE implemented-but-
+  unasserted AC1 clause the prior passes left vacuous: "injects the production RandomSource (ENTROPY-
+  seeded by default)". The gate verified the macrotask Yield, the auto-generate, the live controls, and
+  the missing-canvas throw — but NOT that the wired RandomSource is entropy-seeded. The auto-generate
+  check counts circles only (shape-independent by design), so a fixed-seed regression of `createRandom`
+  (`new SeededRandom()` → `new SeededRandom(0)`) would draw the IDENTICAL walk on every load yet pass
+  every existing check; the factory-isolation check only asserted distinct INSTANCES, not distinct streams
+  (a fixed seed gives distinct instances with identical streams).
+- Files changed: scripts/verify-main.mjs (5 → 6 checks; test-only — no src/ change).
+  - Strengthened the createRandom factory check: now samples a 4-float PREFIX of each of two sources and
+    `notDeepEqual`s them (entropy → different streams; fixed seed → identical → caught), keeping the
+    existing [0,1) float-range and nextInt(60,140) range assertions.
+  - Added an end-to-end check: two independent `bootstrap()` loads (separate fake docs) must auto-generate
+    DIFFERENT walks — fingerprint = the renderer's ordered moveTo/lineTo/arc args; `notEqual` proves the
+    entropy factory is wired through the WHOLE composition, not a hardcoded seed.
+- BOTH new assertions PROVEN TO BITE then reverted: set `createRandom()` → `new SeededRandom(42)`; the
+  strengthened factory check fired `notDeepStrictEqual` (identical streams) and aborted; temporarily
+  relaxing it then showed the end-to-end check fire ("two page loads auto-generate DIFFERENT walks").
+  Reverted both via precise Edits (NOT git checkout — verify-main.mjs + main.ts uncommitted at that point)
+  + `npm run clean`.
+- Verified: npm run clean + tsc -b clean; npm test 243 pass (no regressions); verify:renderer green;
+  verify:controls 28/28 green; verify:main 6/6 green.
+- **Learnings for future iterations:**
+  - A shape-INDEPENDENT auto-generate assertion (count-of-circles) cannot catch a fixed-seed regression of
+    a "random by default" port. Guard "entropy-seeded by default" with a stream-prefix `notDeepEqual` at
+    the factory AND a two-load fingerprint `notEqual` end-to-end. Non-flaky: two entropy count=90 walks
+    collide with ~0 probability (different turn sequence AND 88 independent segment lengths).
+  - verify-main.mjs's footer prints the `passed` counter dynamically, so adding a check needs no count bump.
+  - The same fingerprint (filter moveTo/lineTo/arc args from the recording fake ctx → JSON) is a compact
+    "walk shape" identity usable for US-022's "same seed → identical walk" reproducibility check too.
 ---
