@@ -34,9 +34,27 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
 - Grid lines are lattice-aligned (`Math.ceil(min/60)*60`) and clipped to the content box.
 - Path is one connected polyline through the waypoint centres — orthogonality is guaranteed by the
   `Segment` constructor (corners only at waypoints, no diagonals, no mid-segment bends).
-- `options: DisplayOptions` (showWildcards / showTurns) is accepted but only CONSUMED from **US-014**
-  (turn labels + wildcard rings). US-014 should reuse `turnLabelPoint(position)` exported from
-  `domain/layout-rules.js` for the NE-label geometry (same geometry as the invariant — no divergence).
+- `options: DisplayOptions` (showWildcards / showTurns) is consumed from **US-014** on. The two
+  toggles are INDEPENDENT and gate two separate `draw()` passes added AFTER the base picture (inside
+  the same translate, order rings-then-labels so a label is never occluded):
+  - `showWildcards` → `drawWildcardRings`: an orange (`#ff8c00`) ring, 3px, at radius 30px from the
+    centre of every `wp.wildcard` waypoint (the ring sits outside the r=25 circle, never overlaps it).
+  - `showTurns` → `drawTurnLabels`: each interior waypoint's outbound turn label — `L`/`R`, or `W`
+    for a wildcard — in `bold 16px Arial` (`#222222`), centred at `turnLabelPoint(position)` IMPORTED
+    from `domain/layout-rules.js` (the exact NE 45°/46px geometry the layout invariant reserves
+    clearance for — do NOT recompute it here, or the drawn label can drift from the reserved gap).
+  - The wildcard `W` is a TURN label → governed by `showTurns`, NOT `showWildcards`. The orange ring
+    is the separate wildcard indicator → governed by `showWildcards`. Don't conflate them.
+  - Label text comes from a module fn `turnLabelText(wp)`: `null` for terminals (first/last show no
+    label), `"W"` for wildcards (their `outboundTurn` is `null` by the Waypoint invariant), else
+    `Turn.Left`→`"L"` / `Turn.Right`→`"R"`.
 - Styling: terminals (`waypoint.isTerminal`) = black fill / white border / white number; interiors =
   white fill / black border / black number; numbers in `bold 20px Arial`, centred
   (`textAlign:"center"`, `textBaseline:"middle"`).
+- `npm run verify:renderer` covers US-014: for counts 10/20/90 it asserts from the RECORDED ops across
+  ALL FOUR toggle combinations (one L/R/W label per interior wp at its NE `turnLabelPoint`, terminals
+  none; one orange r=30 3px ring per wildcard at its centre; labels present iff `showTurns`, rings iff
+  `showWildcards`; n circles + n numbers regardless). NOTE: turn labels are `fillText` ops too — the
+  US-013 "n numbers" count filters them out with `!TURN_LABELS.has(text)` (waypoint numbers are
+  numeric, never L/R/W). When US-015 adds scaling, the ring radius / label offset are generation-space
+  px that the US-015 transform scales along with everything else (no special-casing).

@@ -17,13 +17,21 @@ import { dirname, resolve } from "node:path";
 const dist = resolve(dirname(fileURLToPath(import.meta.url)), "../dist/src");
 const { walkGenerator } = await import(`${dist}/domain/walk-generator.js`);
 const { SeededRandom } = await import(`${dist}/domain/seeded-random.js`);
-const { WAYPOINT_RADIUS } = await import(`${dist}/domain/layout-rules.js`);
+const { WAYPOINT_RADIUS, turnLabelPoint } = await import(`${dist}/domain/layout-rules.js`);
 const { CanvasRenderer } = await import(`${dist}/adapters/canvas-renderer.js`);
 
 const CANVAS_W = 794; // A4 @ 96 PPI — US-015 enforces this cap; here it is just the fake surface size.
 const CANVAS_H = 1123;
 const CELL = 60; // grid cell, generation-space px
 const PAD = 100; // padding around the waypoint bounding box, each side
+
+// US-014 AC values (the renderer's wildcard ring + turn label, asserted as a golden gate).
+const RING_RADIUS = 30; // orange wildcard ring, radius px from centre
+const RING_WIDTH = 3; // orange wildcard ring stroke width
+const RING_COLOUR = "#ff8c00"; // orange
+const TURN_LABEL_COLOUR = "#222222"; // L / R / W ink
+const TURN_LABEL_FONT = "bold 16px Arial";
+const TURN_LABELS = new Set(["L", "R", "W"]);
 
 /**
  * A recording fake `CanvasRenderingContext2D`. Every op is pushed with a snapshot of the styles
@@ -69,11 +77,28 @@ function generateWalk(count, seed) {
   return step.value.walk;
 }
 
-function renderToOps(walk) {
+function renderToOps(walk, options = { showWildcards: true, showTurns: true }) {
   const { ctx, ops } = makeFakeContext();
   const renderer = new CanvasRenderer({ width: CANVAS_W, height: CANVAS_H, getContext: () => ctx });
-  renderer.draw(walk, { showWildcards: true, showTurns: true });
+  renderer.draw(walk, options);
   return ops;
+}
+
+/** The expected outbound turn label for a waypoint, or null when none should be shown. */
+function expectedLabel(wp) {
+  if (wp.isTerminal) return null;
+  if (wp.wildcard) return "W";
+  if (wp.outboundTurn === "L") return "L"; // Turn.Left
+  if (wp.outboundTurn === "R") return "R"; // Turn.Right
+  return null;
+}
+
+/** Recorded turn-label fillTexts (text in {L,R,W}) and wildcard-ring arcs (r=30). */
+function turnLabelOps(ops) {
+  return ops.filter((o) => o.op === "fillText" && TURN_LABELS.has(o.text));
+}
+function ringArcOps(ops) {
+  return ops.filter((o) => o.op === "arc" && o.r === RING_RADIUS);
 }
 
 function verifyDraw(count, seed) {
@@ -151,7 +176,8 @@ function verifyDraw(count, seed) {
   // the fill/stroke/fillText ops AFTER each arc (the renderer sets the style just before those calls).
   const circles = ops.filter((o) => o.op === "arc" && o.r === WAYPOINT_RADIUS);
   assert.equal(circles.length, n, `${n} radius-${WAYPOINT_RADIUS} circles`);
-  const texts = ops.filter((o) => o.op === "fillText");
+  // Waypoint numbers only — exclude the US-014 turn labels (L/R/W), which are also fillText ops.
+  const texts = ops.filter((o) => o.op === "fillText" && !TURN_LABELS.has(o.text));
   assert.equal(texts.length, n, `${n} numbers`);
   let blackTerminals = 0;
   for (const wp of walk.waypoints) {
@@ -178,6 +204,77 @@ function verifyDraw(count, seed) {
   console.log(`  ✓ count=${count} seed=${seed}: ${n} waypoints, ${circles.length} circles, ${verticals.length}×${horizontals.length} grid, ${texts.length} numbers`);
 }
 
+/**
+ * US-014: outbound turn labels (L/R/W at the NE 46px position; terminals none) and orange wildcard
+ * rings (r=30, 3px), each governed INDEPENDENTLY by showTurns / showWildcards. Asserts the labels
+ * and rings are present & correct when their toggle is on, and absent when it is off — across all
+ * four toggle combinations — proving the W label tracks Show Turns and the ring tracks Show Wildcards.
+ */
+function verifyTurnsAndWildcards(count, seed) {
+  const walk = generateWalk(count, seed);
+  const n = walk.waypoints.length;
+  const wildcards = walk.waypoints.filter((wp) => wp.wildcard);
+  const labelled = walk.waypoints.filter((wp) => expectedLabel(wp) !== null);
+  assert.ok(wildcards.length > 0, `count=${count} seed=${seed} has at least one wildcard to test`);
+  assert.ok(labelled.length > 0, `count=${count} seed=${seed} has at least one turn label to test`);
+
+  // --- Turn labels (showTurns on): one L/R/W per interior waypoint, at its NE 46px label position.
+  const opsT = renderToOps(walk, { showWildcards: false, showTurns: true });
+  const labels = turnLabelOps(opsT);
+  assert.equal(labels.length, labelled.length, `${labelled.length} turn labels (one per interior waypoint)`);
+  for (const wp of walk.waypoints) {
+    const want = expectedLabel(wp);
+    const lp = turnLabelPoint(wp.position);
+    const hit = labels.filter((o) => o.lx === lp.x && o.ly === lp.y);
+    if (want === null) {
+      assert.equal(hit.length, 0, `terminal/labelless wp${wp.sequenceNumber} draws no turn label`);
+      continue;
+    }
+    assert.equal(hit.length, 1, `wp${wp.sequenceNumber} draws exactly one turn label at its NE position`);
+    assert.equal(hit[0].text, want, `wp${wp.sequenceNumber} turn label text`);
+    assert.equal(hit[0].fillStyle, TURN_LABEL_COLOUR, `wp${wp.sequenceNumber} turn label colour`);
+    assert.equal(hit[0].font, TURN_LABEL_FONT, `wp${wp.sequenceNumber} turn label font`);
+    assert.equal(hit[0].textAlign, "center", `wp${wp.sequenceNumber} turn label centred (align)`);
+    assert.equal(hit[0].textBaseline, "middle", `wp${wp.sequenceNumber} turn label centred (baseline)`);
+  }
+  // Every wildcard's label is specifically "W" (it is governed by Show Turns, not Show Wildcards).
+  for (const wp of wildcards) {
+    const lp = turnLabelPoint(wp.position);
+    const hit = labels.find((o) => o.lx === lp.x && o.ly === lp.y);
+    assert.ok(hit && hit.text === "W", `wildcard wp${wp.sequenceNumber} shows a W label under Show Turns`);
+  }
+
+  // --- Wildcard rings (showWildcards on): one orange r=30 3px ring per wildcard, at its centre.
+  const opsW = renderToOps(walk, { showWildcards: true, showTurns: false });
+  const rings = ringArcOps(opsW);
+  assert.equal(rings.length, wildcards.length, `${wildcards.length} wildcard rings (one per wildcard)`);
+  for (const wp of wildcards) {
+    const ring = rings.find((o) => o.lx === wp.position.x && o.ly === wp.position.y);
+    assert.ok(ring, `wildcard wp${wp.sequenceNumber} has a ring at its centre`);
+    assert.equal(ring.strokeStyle, RING_COLOUR, `wildcard wp${wp.sequenceNumber} ring is orange`);
+    assert.equal(ring.lineWidth, RING_WIDTH, `wildcard wp${wp.sequenceNumber} ring is ${RING_WIDTH}px`);
+  }
+  // No ring sits on a non-wildcard waypoint.
+  for (const wp of walk.waypoints) {
+    if (wp.wildcard) continue;
+    assert.ok(!rings.some((o) => o.lx === wp.position.x && o.ly === wp.position.y), `non-wildcard wp${wp.sequenceNumber} has no ring`);
+  }
+
+  // --- Independence across all four toggle combinations.
+  for (const showTurns of [false, true]) {
+    for (const showWildcards of [false, true]) {
+      const ops = renderToOps(walk, { showWildcards, showTurns });
+      assert.equal(turnLabelOps(ops).length, showTurns ? labelled.length : 0, `labels present iff showTurns (T=${showTurns} W=${showWildcards})`);
+      assert.equal(ringArcOps(ops).length, showWildcards ? wildcards.length : 0, `rings present iff showWildcards (T=${showTurns} W=${showWildcards})`);
+      // The base picture (numbered waypoint circles) is unaffected by either toggle.
+      assert.equal(ops.filter((o) => o.op === "arc" && o.r === WAYPOINT_RADIUS).length, n, `${n} waypoint circles regardless of toggles`);
+      assert.equal(ops.filter((o) => o.op === "fillText" && !TURN_LABELS.has(o.text)).length, n, `${n} waypoint numbers regardless of toggles`);
+    }
+  }
+
+  console.log(`  ✓ count=${count} seed=${seed}: ${labelled.length} turn labels, ${wildcards.length} wildcard rings, toggles independent`);
+}
+
 function verifyClear() {
   const { ctx, ops } = makeFakeContext();
   const renderer = new CanvasRenderer({ width: CANVAS_W, height: CANVAS_H, getContext: () => ctx });
@@ -202,4 +299,10 @@ verifyDraw(20, 99);
 verifyDraw(90, 4242);
 verifyClear();
 verifyMissingContext();
+
+console.log("US-014 turn labels + wildcard rings (counts with >=1 wildcard):");
+// count=2 has no interior/wildcards (covered by verifyDraw above); 10/20/90 all have wildcards.
+verifyTurnsAndWildcards(10, 4242);
+verifyTurnsAndWildcards(20, 99);
+verifyTurnsAndWildcards(90, 4242);
 console.log("ALL RENDERER ASSERTIONS PASSED");

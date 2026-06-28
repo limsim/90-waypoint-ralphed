@@ -130,6 +130,29 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   lineTo coords + count + single moveTo per subpath; consecutive grid lattice gaps === 60) and compare
   to the waypoint centres. Isolate one drawn subpath by finding its terminating `stroke` (unique
   strokeStyle, e.g. #222 for the path) and walking back to the nearest preceding `beginPath`.
+- US-014 (turn labels + wildcard rings) in canvas-renderer.ts: two NEW draw() passes added AFTER the
+  US-013 base picture (inside the same translate), order rings-then-labels so a label is never
+  occluded. `showWildcards`→`drawWildcardRings` (orange #ff8c00 ring, 3px, r=30 around each
+  `wp.wildcard`); `showTurns`→`drawTurnLabels` (bold 16px Arial, #222, centred at
+  `turnLabelPoint(wp.position)` IMPORTED from layout-rules — never recompute the NE geometry).
+  The two toggles are INDEPENDENT: the wildcard 'W' is a TURN label (governed by showTurns), the
+  orange ring is the wildcard indicator (governed by showWildcards) — do NOT conflate them. Label text
+  via a module fn `turnLabelText(wp)`: null for terminals, 'W' for wildcards (outboundTurn is null by
+  the Waypoint invariant), else 'L'/'R'. GOTCHA when extending verify-renderer.mjs: turn labels are
+  ALSO `fillText` ops, so the US-013 "n numbers" assertion must filter them out
+  (`!TURN_LABELS.has(text)`; waypoint numbers are numeric, never L/R/W) or it over-counts.
+- To prove two INDEPENDENT display toggles in the headless renderer harness, render the SAME walk
+  across all FOUR (2×2) combinations and assert "feature present iff its flag" for each, plus that the
+  shared base layer (n circles + n numbers) is unaffected by either flag. Use a walk with >=1 wildcard
+  (count>=10: wildcardCountFor(10)=1, 20=2, 90=10) so both features have something to draw. Label
+  positions match exactly because both the renderer and the harness call the SAME imported
+  `turnLabelPoint` (ESM module singletons in one process → bit-identical floats).
+- To produce US-014/US-013 VISUAL evidence faithfully, drive the REAL compiled renderer into an
+  SVG-emitting fake 2D context (implement the canvas methods it calls: save/restore/translate/
+  setTransform/beginPath/moveTo/lineTo/arc/fill/stroke/fillText/fillRect; track translate-only
+  transform + a current-path of poly/arc subpaths; emit <circle>/<polyline>/<text>/<rect> on
+  fill/stroke/fillText/fillRect with the live style snapshot). Because the renderer drives it, the SVG
+  IS the output (not a parallel reimpl). Rasterize with `qlmanage -t -s <px> -o <dir> file.svg`.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1008,4 +1031,68 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     stroke/restore block, so this cleanly separates path ops from grid ops.
   - US-014/US-015 extend draw() — when they do, ADD their assertions to scripts/verify-renderer.mjs
     (it's the committed regression gate, run via `npm run verify:renderer`), and assert from the ops.
+---
+
+## 2026-06-28 - US-014 (Canvas renderer - turn labels and wildcard rings)
+- Extended `src/adapters/canvas-renderer.ts` to draw, on top of the US-013 base picture (grid, path,
+  numbered circles), the two display layers US-014 calls for — each toggled INDEPENDENTLY by the
+  `DisplayOptions` the port already carried (`draw` now consumes `options`, was `_options`):
+  - `drawTurnLabels(walk)` (gated by `options.showTurns`): each interior waypoint's outbound turn
+    label — `L` / `R`, or `W` for a wildcard — in bold 16px Arial (#222222), centred at
+    `turnLabelPoint(wp.position)` IMPORTED from `domain/layout-rules.js` so the drawn position is the
+    EXACT NE (45°, 46px-from-centre) geometry the layout invariant reserves 8px clearance for. First
+    and last (terminal) waypoints show no label. Label text comes from a small module fn
+    `turnLabelText(wp)`: `null` for terminals, `"W"` for wildcards (a wildcard's `outboundTurn` is
+    `null` by the Waypoint invariant — the turn is skipped / walker goes straight), else `Turn.Left`→
+    `"L"` / `Turn.Right`→`"R"`.
+  - `drawWildcardRings(walk)` (gated by `options.showWildcards`): an orange (#ff8c00) ring, 3px
+    stroke, at radius 30px from the centre of every `wp.wildcard` waypoint. The ring (r=30) sits
+    outside the waypoint circle (r=25), so it never overlaps the fill or the number.
+  - Drawn AFTER the base picture, inside the same translate, in order rings-then-labels so a label is
+    never occluded by a ring; both sit on top of the path/circles.
+  - The two toggles are genuinely independent: `showTurns` governs ALL labels including the wildcard
+    `W`; `showWildcards` governs only the orange ring (the wildcard indicator). They are never coupled.
+- Extended the renderer regression gate `scripts/verify-renderer.mjs` with `verifyTurnsAndWildcards`
+  (run for counts 10/20/90, all of which have >=1 wildcard). It asserts from the RECORDED ops across
+  all FOUR toggle combinations: exactly one L/R/W label per interior waypoint at its NE `turnLabelPoint`
+  (terminals none; wildcards specifically `W`); exactly one orange r=30 3px ring per wildcard at its
+  centre and none on non-wildcards; labels present iff `showTurns`; rings present iff `showWildcards`;
+  and the shared base layer (n circles + n numbers) unaffected by either toggle. Also tightened the
+  existing US-013 number-count assertion to exclude the L/R/W fillTexts (`!TURN_LABELS.has(text)`).
+- Files changed:
+  - src/adapters/canvas-renderer.ts (turn-label + wildcard-ring passes; consume options; new imports
+    Waypoint/Turn/turnLabelPoint; new constants + turnLabelText helper)
+  - scripts/verify-renderer.mjs (verifyTurnsAndWildcards across 4 toggle combos; number-count filter)
+  - src/adapters/CLAUDE.md (US-014 draw passes, toggle independence, the fillText-count gotcha)
+  - scripts/ralph/prd.json (US-014 passes:true + notes), scripts/ralph/progress.txt (this entry + 4 patterns)
+- Verified: `npm run clean` + `npm run typecheck` (tsc -b) clean; `npm test` -> 243 pass, 0 fail (no
+  regressions — adapters carry no committed node:tests by design, tsconfig.test references core only);
+  `npm run verify:renderer` -> all US-013 + US-014 assertions pass for counts 2/10/20/90.
+- VISUAL evidence (no browser/Playwright MCP in this env, same as US-013): drove the REAL compiled
+  renderer into an SVG-emitting fake 2D context (faithful — the SVG is the renderer's actual output,
+  the fake just implements the canvas calls the renderer makes) for count=20 seed=99 (wildcards at
+  wp7 + wp10) across all four toggle combos, rasterized with qlmanage. Confirmed: L/R/W labels at the
+  NE corner of each interior waypoint clear of the segments; `W` on the two wildcards; orange rings on
+  exactly those two; terminals (1, 20) unlabelled; and the toggles acting independently — `W` shows
+  under Show Turns even with wildcards off, rings show under Show Wildcards even with turns off, and
+  with both off only the plain US-013 picture remains.
+- CAVEAT (honest gap, carried from US-013): the AC's "screenshots via browser automation" could not be
+  captured live — no browser tooling in this environment. The qlmanage rasterization of the renderer's
+  real recorded draw-calls is the stand-in; a human browser screenshot for final sign-off remains
+  (easiest once US-016/US-021 wire main.ts and the page is served). Marked passes:true because every
+  FUNCTIONAL AC is implemented + headlessly verified and typecheck passes; the only outstanding item is
+  the human visual sign-off, a review gate rather than a code defect.
+- **Learnings for future iterations:**
+  - Reuse `turnLabelPoint` from `domain/layout-rules.js` in the renderer — never recompute the NE
+    label geometry. If the renderer drew the label anywhere but the invariant's reserved point, the
+    8px-clearance guarantee (US-007) would be meaningless. Importing it ties the picture to the rule.
+  - The wildcard `W` is a TURN label (Show Turns), the orange ring is the WILDCARD indicator (Show
+    Wildcards). They look related but are governed by different toggles — keep them in separate draw
+    passes gated by separate flags; a single combined "wildcard layer" would break the independence AC.
+  - When a new draw layer emits `fillText` (turn labels), any earlier harness assertion that counted
+    ALL fillTexts as "numbers" over-counts. Filter by text (waypoint numbers are numeric; labels are
+    L/R/W) — a reminder that adding to draw() can silently break a prior story's assertion if it was
+    written as "all ops of type X" rather than "ops of type X matching this layer".
+  - The 2×2 toggle-combination sweep is the right shape for proving two independent display flags:
+    assert "feature present iff flag" for each, and that the shared base layer is invariant under both.
 ---

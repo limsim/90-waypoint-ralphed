@@ -1,5 +1,7 @@
 import { Walk } from "../domain/walk.js";
-import { WAYPOINT_RADIUS } from "../domain/layout-rules.js";
+import { Waypoint } from "../domain/waypoint.js";
+import { Turn } from "../domain/turn.js";
+import { WAYPOINT_RADIUS, turnLabelPoint } from "../domain/layout-rules.js";
 import { DisplayOptions, Renderer } from "../application/renderer-port.js";
 
 /**
@@ -10,10 +12,13 @@ import { DisplayOptions, Renderer } from "../application/renderer-port.js";
  * generation-space px; this adapter is the only place those coordinates meet a pixel surface.
  *
  * US-013 scope: the subtle grid, the connected orthogonal path, and the numbered waypoint circles.
- * Turn labels + wildcard rings land in US-014 (the `options` are accepted here but only consumed
- * from US-014 on); the A4 cap / uniform downscale / auto-centre / viewport fit land in US-015. To
- * keep the walk visible before US-015, `draw` applies a plain translate so the padded content box
- * starts at the canvas origin; US-015 layers the scale + centre transform on top of that.
+ * US-014 adds, on top of that base picture: each interior waypoint's outbound turn label (L / R, or
+ * W for a wildcard) at the fixed NE 46px-from-centre position, and an orange ring around every
+ * wildcard waypoint. These two layers are toggled INDEPENDENTLY by the `DisplayOptions` — the
+ * L/R/W label by `showTurns`, the orange ring by `showWildcards`. The A4 cap / uniform downscale /
+ * auto-centre / viewport fit land in US-015. To keep the walk visible before US-015, `draw` applies
+ * a plain translate so the padded content box starts at the canvas origin; US-015 layers the
+ * scale + centre transform on top of that.
  */
 
 /** Generation-space size of one grid cell (px). */
@@ -25,6 +30,10 @@ const GRID_PADDING = 100;
 const SEGMENT_WIDTH = 2;
 const GRID_WIDTH = 1;
 const WAYPOINT_BORDER_WIDTH = 2;
+const WILDCARD_RING_WIDTH = 3;
+
+/** Wildcard ring: an orange circle at radius 30px from the waypoint centre (US-014). */
+const WILDCARD_RING_RADIUS = 30;
 
 /** Colours. */
 const BACKGROUND_COLOUR = "#ffffff";
@@ -36,8 +45,13 @@ const TERMINAL_TEXT = "#ffffff";
 const WAYPOINT_FILL = "#ffffff";
 const WAYPOINT_BORDER = "#000000";
 const WAYPOINT_TEXT = "#000000";
+const TURN_LABEL_COLOUR = "#222222"; // L / R / W labels — same dark ink as the path
+const WILDCARD_RING_COLOUR = "#ff8c00"; // orange
 
 const WAYPOINT_FONT = "bold 20px Arial";
+const TURN_LABEL_FONT = "bold 16px Arial";
+/** Wildcard turn label — the walker goes straight, so the skipped turn shows as a W. */
+const WILDCARD_LABEL = "W";
 
 export class CanvasRenderer implements Renderer {
   private readonly ctx: CanvasRenderingContext2D;
@@ -58,10 +72,12 @@ export class CanvasRenderer implements Renderer {
   }
 
   /**
-   * Draws the full walk: white background, grid, connected orthogonal path, numbered waypoints.
-   * `options` is part of the port contract but unused until US-014 (turn labels / wildcard rings).
+   * Draws the full walk: white background, grid, connected orthogonal path, numbered waypoints,
+   * and — toggled independently by `options` — the wildcard rings (`showWildcards`) and the
+   * outbound turn labels (`showTurns`). Rings are drawn before labels so a label is never occluded
+   * by a ring; both sit on top of the path and circles.
    */
-  draw(walk: Walk, _options: DisplayOptions): void {
+  draw(walk: Walk, options: DisplayOptions): void {
     const { ctx, canvas } = this;
 
     // Background, in screen space (independent of the content transform).
@@ -85,6 +101,8 @@ export class CanvasRenderer implements Renderer {
     this.drawGrid(minX, minY, maxX, maxY);
     this.drawPath(walk);
     this.drawWaypoints(walk);
+    if (options.showWildcards) this.drawWildcardRings(walk);
+    if (options.showTurns) this.drawTurnLabels(walk);
 
     ctx.restore();
   }
@@ -160,5 +178,65 @@ export class CanvasRenderer implements Renderer {
       ctx.fillText(String(wp.sequenceNumber), x, y);
     }
     ctx.restore();
+  }
+
+  /**
+   * An orange ring around every wildcard waypoint (radius 30px from the centre, 3px stroke).
+   * Governed by `DisplayOptions.showWildcards`. The ring (r=30) sits outside the waypoint circle
+   * (r=25), so it never overlaps the circle fill or its number.
+   */
+  private drawWildcardRings(walk: Walk): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.strokeStyle = WILDCARD_RING_COLOUR;
+    ctx.lineWidth = WILDCARD_RING_WIDTH;
+    for (const wp of walk.waypoints) {
+      if (!wp.wildcard) continue;
+      ctx.beginPath();
+      ctx.arc(wp.position.x, wp.position.y, WILDCARD_RING_RADIUS, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Each interior waypoint's outbound turn label — `L` / `R`, or `W` for a wildcard (the turn is
+   * skipped, the walker goes straight). Drawn at the fixed NE (45°) position 46px from the centre,
+   * via {@link turnLabelPoint} so the drawn position matches the layout invariant's reserved
+   * clearance exactly. First and last waypoints are terminal and show no label. Governed by
+   * `DisplayOptions.showTurns`.
+   */
+  private drawTurnLabels(walk: Walk): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.font = TURN_LABEL_FONT;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = TURN_LABEL_COLOUR;
+    for (const wp of walk.waypoints) {
+      const label = turnLabelText(wp);
+      if (label === null) continue;
+      const p = turnLabelPoint(wp.position);
+      ctx.fillText(label, p.x, p.y);
+    }
+    ctx.restore();
+  }
+}
+
+/**
+ * The outbound turn label for a waypoint, or `null` when none should be shown.
+ * Terminals (first/last) have no outbound turn → no label. A wildcard shows `W` (its turn is
+ * skipped). Otherwise the label is `L` / `R` from the outbound turn.
+ */
+function turnLabelText(wp: Waypoint): string | null {
+  if (wp.isTerminal) return null;
+  if (wp.wildcard) return WILDCARD_LABEL;
+  switch (wp.outboundTurn) {
+    case Turn.Left:
+      return "L";
+    case Turn.Right:
+      return "R";
+    default:
+      return null;
   }
 }
