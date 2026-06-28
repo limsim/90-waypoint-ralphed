@@ -39,6 +39,13 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   padded content box, so the box's screen centre is always the canvas centre (equal margins). Stroke
   widths / ring radius / label offset are generation-space px and scale ALONG with everything (no
   special-casing) — dense sub-nominal spacing for big walks is intended (ADR-0005), not a bug.
+  - The `cap = min(A4, canvas dim)` clause (the literal "capped at A4") is load-bearing only when the
+    canvas is LARGER than A4 — on an A4-sized canvas `min(A4, canvas) == A4 == canvas`, so a regression
+    capping at the canvas instead of A4 is invisible. `verify:renderer` therefore renders count=90 onto a
+    canvas STRICTLY larger than A4 (and big enough that the walk fits at 1:1, so a canvas-only cap would
+    NOT downscale) and asserts the derived scale is still the A4 cap — proven to bite (drop the `Math.min`
+    → harness fails on the larger-canvas check while every A4-sized check still passes). `makeFakeContext`/
+    `renderToOps` take optional `(canvasW, canvasH)` for this; default to A4.
 - **Viewport fit (AC4) is CSS, not a Canvas transform** — it lives in `index.html`
   (`canvas { max-width: 100%; height: auto }`). The backing store stays A4 (794×1123); only the
   displayed element shrinks on a narrow viewport, preserving aspect ratio (no horizontal scroll).

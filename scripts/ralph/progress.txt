@@ -177,6 +177,17 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   derive the applied scale from the OUTPUT (screen spread / gen spread of two circles), match it to
   `min(1,A4/content)` computed with A4 GOLDEN literals hard-coded in the harness (never imported), and
   assert centring as a PROPERTY (equal opposite margins) not by re-running the renderer's offset formula.
+- A `cap = min(LIMIT, runtimeDim)` clause is INVISIBLE to a harness whose runtimeDim equals LIMIT
+  (here US-015's `cap = min(A4, canvas)` on an A4-sized canvas: `min(A4,A4)=A4`, so dropping the
+  `Math.min` and capping at the canvas passes every assertion). To gate the cap itself, exercise it
+  where the two operands DIVERGE: render onto a canvas STRICTLY larger than A4 and big enough that the
+  walk fits at 1:1 (`max(2*A4, ceil(content)+1)`), so a canvas-only cap emits scale 1 (no downscale)
+  while the A4 cap still shrinks — then assert the output-derived scale is the A4 cap, NOT 1. To support
+  this, `makeFakeContext`/`renderToOps` take optional `(canvasW, canvasH)` (default A4). Centring uses
+  the canvas dim while the scale uses min(A4,canvas), so on a larger canvas the margins grow but the
+  content box still lands ≤ A4. Always PROVE a new gate bites (temporarily regress, watch it fail, then
+  revert) — and `npm run clean` after the revert: `tsc -b` incremental may keep stale `dist/` if the
+  restored file's mtime is older than `.tsbuildinfo`.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1184,4 +1195,50 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - verifyDraw renders with the default `{showWildcards:true, showTurns:true}`, so it is the right place
     to cross-check decoration COUNTS against the walk for every count in one render; verifyTurnsAndWildcards
     then specialises in the per-toggle independence + per-waypoint geometry for the wildcard-bearing counts.
+---
+
+## 2026-06-28 - US-015 (A4 cap, uniform downscale, auto-centre, viewport fit) — REFINEMENT
+- US-015 already passed; re-verified all 7 acceptance criteria against the implementation — still
+  green, NO impl change needed (canvas-renderer.ts draw() applies translate(offset)->scale(s)->
+  translate(-min) with s=min(1, capW/contentW, capH/contentH), cap=min(A4{794,1123}, canvas dim),
+  offset=(canvasDim-contentDim*s)/2; AC4 viewport fit is CSS max-width:100%/height:auto in index.html;
+  domain coords untouched). This pass closes the ONE AC1 gap every prior pass left untested.
+- Gap closed: the literal "capped at A4 (794×1123)" lives in the `cap = min(A4, canvas dim)` clause,
+  but verifyA4Fit renders onto an A4-SIZED canvas where `min(A4, canvas) = A4 = canvas` — so it could
+  not tell whether the renderer caps at A4 or merely at the canvas. A regression dropping the
+  `Math.min(A4_WIDTH, canvas.width)` (capping at the canvas) passed ALL four verifyA4Fit checks.
+- Change (verify harness only, scripts/verify-renderer.mjs):
+  - Parametrised `makeFakeContext(canvasW=CANVAS_W, canvasH=CANVAS_H)` and
+    `renderToOps(walk, options, canvasW, canvasH)` so a render can target a non-A4 canvas.
+  - Added `verifyA4CapOnLargerCanvas(90, 4242)`: renders count=90 onto a canvas STRICTLY larger than
+    A4 and big enough that the walk fits at natural size — `bigW=max(2*A4_W, ceil(contentW)+1)`,
+    `bigH=max(2*A4_H, ceil(contentH)+1)` = 1588×2246 here. A canvas-only cap would emit scale 1 (the
+    walk fits 1588×2246), whereas the A4 cap still downscales to 0.5603 — the hypotheses diverge
+    sharply. Asserts: canvasScale===1 and a4Scale<1 (the premise), output-derived scale === a4Scale
+    (NOT the canvas cap of 1), content screen box stays ≤ A4 (794×1123) though the canvas is far
+    larger, every circle lands at its centred-fit position, and equal opposite margins over the LARGER
+    canvas (centring uses the canvas dim, scale uses min(A4,canvas)). Background still covers the full
+    1588×2246 canvas.
+- PROVEN TO BITE: temporarily set `capW=canvas.width; capH=canvas.height` (drop the A4 Math.min) →
+  `npm run clean && npm run verify:renderer` failed on the new check ("scale 1 is the A4 cap 0.5603,
+  NOT the canvas cap 1") while ALL FOUR A4-sized verifyA4Fit checks still PASSED — confirming the gap
+  was real and the new check is the only thing that gates it. Reverted; clean-rebuilt; all green.
+- Files changed: scripts/verify-renderer.mjs (parametrised fake ctx/renderToOps + verifyA4CapOnLargerCanvas),
+  src/adapters/CLAUDE.md (US-015 larger-canvas cap note), scripts/ralph/prd.json (US-015 notes),
+  scripts/ralph/progress.txt (this entry + a Codebase Pattern).
+- Verified: `npm run clean` + `npm run typecheck` (tsc -b) clean; `npm test` -> 243 pass, 0 fail (no
+  regressions — adapters carry no node:tests by design); `npm run verify:renderer` -> all US-013/14/15
+  assertions pass including the new larger-canvas A4-cap check.
+- CAVEAT (carried from US-013/US-014): a LIVE browser screenshot still could not be captured (no
+  browser/Playwright MCP in this env); the headless first-principles harness + qlmanage rasterization
+  of the real draw-calls stand in, human browser sign-off remains (easiest once US-016/US-021 wire main.ts).
+- **Learnings for future iterations:**
+  - A `cap = min(LIMIT, runtimeDim)` is untestable when the harness's runtimeDim equals LIMIT — the
+    `min` is a no-op and a regression to bare runtimeDim is invisible. Gate it where the operands
+    DIVERGE: pick a runtimeDim on the other side of LIMIT and assert the LIMIT side wins.
+  - For the A4 cap specifically: a canvas larger than A4 (and ≥ the content) makes the canvas-only cap
+    a no-op scale of 1, so the A4 cap is the sole reason any downscale happens — a clean A/B on one
+    variable, like the bounds-growth A/B used for the generator.
+  - After reverting a file via `mv`/`cp` whose mtime is older than `.tsbuildinfo`, `tsc -b` may skip
+    recompiling it — run `npm run clean` before re-checking, or you verify against stale `dist/`.
 ---

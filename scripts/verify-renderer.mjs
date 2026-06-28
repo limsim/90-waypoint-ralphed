@@ -61,7 +61,7 @@ assert.ok(RING_RADIUS > WAYPOINT_RADIUS, "wildcard ring radius sits outside the 
  * A4 fit introduces a real scale, so `a`/`d` are no longer 1 — screen coords (`x`/`y`) now reflect
  * the scale + centre, while `lx`/`ly` stay in generation space (US-013/US-014 assertions use those).
  */
-function makeFakeContext() {
+function makeFakeContext(canvasW = CANVAS_W, canvasH = CANVAS_H) {
   const state = { fillStyle: "", strokeStyle: "", lineWidth: 0, font: "", textAlign: "", textBaseline: "", lineJoin: "", lineCap: "" };
   const ops = [];
   let m = { a: 1, d: 1, e: 0, f: 0 };
@@ -70,7 +70,7 @@ function makeFakeContext() {
   const sx = (x) => m.a * x + m.e;
   const sy = (y) => m.d * y + m.f;
   const ctx = {
-    canvas: { width: CANVAS_W, height: CANVAS_H },
+    canvas: { width: canvasW, height: canvasH },
     save() { stack.push({ ...m }); ops.push({ op: "save" }); },
     restore() { m = stack.pop(); ops.push({ op: "restore" }); },
     // setTransform replaces the matrix; the renderer only ever calls it as the identity reset.
@@ -102,9 +102,9 @@ function generateWalk(count, seed) {
   return step.value.walk;
 }
 
-function renderToOps(walk, options = { showWildcards: true, showTurns: true }) {
-  const { ctx, ops } = makeFakeContext();
-  const renderer = new CanvasRenderer({ width: CANVAS_W, height: CANVAS_H, getContext: () => ctx });
+function renderToOps(walk, options = { showWildcards: true, showTurns: true }, canvasW = CANVAS_W, canvasH = CANVAS_H) {
+  const { ctx, ops } = makeFakeContext(canvasW, canvasH);
+  const renderer = new CanvasRenderer({ width: canvasW, height: canvasH, getContext: () => ctx });
   renderer.draw(walk, options);
   return ops;
 }
@@ -396,6 +396,71 @@ function verifyA4Fit(count, seed) {
   console.log(`  ✓ count=${count} seed=${seed}: scale=${derivedScale.toFixed(4)} (${fits ? "within A4, not enlarged" : "downscaled to fit A4"}), centred, domain coords untouched`);
 }
 
+/**
+ * US-015 AC1 — "the rendered canvas is capped at A4 (794×1123)". The renderer's cap is
+ * `Math.min(A4, canvas dim)`, so the content is bounded by A4 even when the canvas ELEMENT is larger.
+ * verifyA4Fit above can't prove this: it renders onto an A4-sized canvas, where `min(A4, canvas)` ==
+ * A4 == canvas, so a regression that capped at the CANVAS instead of A4 (dropping the `Math.min`)
+ * would pass every one of its assertions. This test renders the SAME oversized walk onto a canvas
+ * STRICTLY LARGER than A4 and large enough that the walk fits it at natural size — so a canvas-only
+ * cap would NOT downscale at all (scale 1), while the A4 cap still shrinks it to ≤ 794×1123. The two
+ * hypotheses diverge sharply, so matching the A4-cap scale proves the cap is A4, not the canvas.
+ */
+function verifyA4CapOnLargerCanvas(count, seed) {
+  const walk = generateWalk(count, seed);
+  const box = walk.boundingBox;
+  const minX = box.minX - PAD, minY = box.minY - PAD;
+  const contentW = (box.maxX - box.minX) + 2 * PAD;
+  const contentH = (box.maxY - box.minY) + 2 * PAD;
+
+  // A canvas strictly larger than A4 AND big enough to hold the walk at natural size (so the
+  // canvas-only cap is exactly 1 — no downscale — making the A4 cap the ONLY reason to shrink).
+  const bigW = Math.max(2 * A4_W, Math.ceil(contentW) + 1);
+  const bigH = Math.max(2 * A4_H, Math.ceil(contentH) + 1);
+
+  const a4Scale = Math.min(1, A4_W / contentW, A4_H / contentH);
+  const canvasScale = Math.min(1, bigW / contentW, bigH / contentH);
+  assert.equal(canvasScale, 1, `walk fits the ${bigW}×${bigH} canvas at natural size (canvas-only cap == 1)`);
+  assert.ok(a4Scale < 1 - 1e-9, `count=${count} exceeds A4, so the A4 cap must downscale (a4Scale ${a4Scale} < 1)`);
+
+  const ops = renderToOps(walk, { showWildcards: true, showTurns: true }, bigW, bigH);
+  const circles = ops.filter((o) => o.op === "arc" && o.r === WAYPOINT_RADIUS);
+  assert.equal(circles.length, walk.waypoints.length, "every waypoint drew a circle on the larger canvas");
+
+  // Derive the applied scale from the output (screen vs local spread) and assert it is the A4 cap,
+  // NOT the canvas cap of 1. This is the crux: a renderer that capped at the canvas would emit scale 1.
+  const a = circles[0], b = circles[circles.length - 1];
+  const dlx = b.lx - a.lx, dly = b.ly - a.ly;
+  const derivedScale = Math.abs(dlx) > Math.abs(dly) ? (b.x - a.x) / dlx : (b.y - a.y) / dly;
+  assert.ok(Math.abs(derivedScale - a4Scale) < 1e-9, `scale ${derivedScale} is the A4 cap ${a4Scale}, NOT the canvas cap ${canvasScale}`);
+
+  // The drawn content box stays within A4 even though the canvas is far larger — that IS "capped at A4".
+  const screenW = contentW * a4Scale, screenH = contentH * a4Scale;
+  assert.ok(screenW <= A4_W + 1e-6, `content screen width ${screenW} ≤ A4 ${A4_W} (capped at A4, not the ${bigW}px canvas)`);
+  assert.ok(screenH <= A4_H + 1e-6, `content screen height ${screenH} ≤ A4 ${A4_H} (capped at A4, not the ${bigH}px canvas)`);
+
+  // Still auto-centred — but over the LARGER canvas, so the margins grow with it (centring uses the
+  // canvas dim, while the scale uses the A4 cap). Verify every circle lands at the centred-fit position.
+  const offsetX = (bigW - screenW) / 2;
+  const offsetY = (bigH - screenH) / 2;
+  for (const o of circles) {
+    const ex = offsetX + a4Scale * (o.lx - minX);
+    const ey = offsetY + a4Scale * (o.ly - minY);
+    assert.ok(Math.abs(o.x - ex) < 1e-6, `circle screen x ${o.x} == fitted ${ex} on the larger canvas`);
+    assert.ok(Math.abs(o.y - ey) < 1e-6, `circle screen y ${o.y} == fitted ${ey} on the larger canvas`);
+  }
+  const boxLeft = offsetX, boxRight = offsetX + screenW;
+  const boxTop = offsetY, boxBottom = offsetY + screenH;
+  assert.ok(Math.abs(boxLeft - (bigW - boxRight)) < 1e-6, "centred horizontally on the larger canvas (equal L/R margins)");
+  assert.ok(Math.abs(boxTop - (bigH - boxBottom)) < 1e-6, "centred vertically on the larger canvas (equal T/B margins)");
+
+  // Background still covers the whole (larger) canvas in screen space.
+  const bg = ops.find((o) => o.op === "fillRect");
+  assert.ok(bg && bg.w === bigW && bg.h === bigH, `background covers the full ${bigW}×${bigH} canvas`);
+
+  console.log(`  ✓ count=${count} seed=${seed}: capped at A4 (scale ${derivedScale.toFixed(4)}) on a ${bigW}×${bigH} canvas — not enlarged to fill it; centred`);
+}
+
 function verifyClear() {
   const { ctx, ops } = makeFakeContext();
   const renderer = new CanvasRenderer({ width: CANVAS_W, height: CANVAS_H, getContext: () => ctx });
@@ -433,4 +498,8 @@ verifyA4Fit(2, 7);
 verifyA4Fit(10, 4242);
 verifyA4Fit(20, 99);
 verifyA4Fit(90, 4242);
+
+console.log("US-015 A4 cap holds on a canvas LARGER than A4 (cap is A4, not the canvas):");
+// count=90 exceeds A4, so the A4 cap downscales even though the walk would fit the larger canvas at 1:1.
+verifyA4CapOnLargerCanvas(90, 4242);
 console.log("ALL RENDERER ASSERTIONS PASSED");
