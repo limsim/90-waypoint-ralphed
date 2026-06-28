@@ -223,6 +223,16 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   between them (a real count=90 generation yields too few times to observe reliably — that property is
   GenerateWalk's, proven in US-011). Stub `globalThis.window = { print }` around the Print check. EXTEND
   this gate when US-017/US-020 add to dom-controls.ts.
+- A headless adapter gate built entirely on FAKE elements + a FAKE document has a blind spot: the REAL
+  index.html it ships against (the `fromDocument` test builds its fake doc straight from `CONTROL_IDS`,
+  so a renamed id, or a changed AC-mandated attribute the fakes hard-code, only blows up in the live
+  browser — untestable here — while the gate stays green). verify:controls closes it by READING the
+  real index.html and asserting the adapter↔markup contract: every `CONTROL_IDS` value exists as an
+  `id=`; the waypoint input is `type=number min=10 max=90 value=90`; both toggles are checkboxes
+  `checked` by default; the overlay has a `.spinner` + "Generating..." text + `@keyframes spin`. Golden
+  values are HARD-CODED in the harness (not imported), so a markup drift fails the gate. Parse without a
+  DOM lib: `tagWithId(id)=html.match(/<[^>]*\bid=["']${id}["'][^>]*>/i)?.[0]`, then regex attrs off that
+  one tag. When adding/renaming a control id (or its AC markup), update BOTH index.html and this check.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1356,3 +1366,40 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     first place UI/view state is held (ADR-0003 keeps the domain stateless). US-017's tooltip/hover will
     also need the current walk for hit-testing — read it from this same adapter, don't add domain state.
 ---
+
+## 2026-06-28 02:13 BST - US-016 (DOM controls driving adapter) — REFINEMENT
+- US-016 already passed; re-verified all 7 functional acceptance criteria green via `npm run
+  verify:controls` (the headless gate: real GenerateWalk/ClearWalk driven through DomControls with
+  fake elements + a recording fake Renderer). Build clean, npm test 243 pass, verify:renderer pass.
+- Refinement (verify harness + docs only, NO impl change): closed the ONE un-faked seam in the
+  controls gate — the index.html ↔ adapter contract. Every prior check used FAKE elements and a
+  FAKE document (the `fromDocument` test builds its fake doc straight from `CONTROL_IDS`), so a
+  drift between `CONTROL_IDS` and the real ids in index.html — or a change to AC-mandated markup the
+  fakes bypass (input range/default, toggle defaults, overlay spinner/text) — would only blow up in
+  the live browser (no MCP here) while the harness stayed green.
+- Added a 12th check to scripts/verify-controls.mjs that reads the REAL index.html and asserts:
+  (a) every `CONTROL_IDS` value exists as an `id=` (so `fromDocument` won't throw "required element
+  not found" at startup); (b) the waypoint input is `type=number min=10 max=90 value=90` (AC4
+  "range 10-90, default 90", tied to the adapter's clamp/default); (c) both toggles are checkboxes
+  `checked` by default (AC5/AC6 "visible by default"); (d) the overlay has a `.spinner`, the
+  "Generating..." text, and its `@keyframes spin` (AC2 "spinner + 'Generating...'"). Golden values
+  (10/90/90, "Generating...") are HARD-CODED in the harness, NOT imported, per the codebase pattern.
+- PROVEN TO BITE (then reverted via `git checkout -- index.html`): renamed #generate-button →
+  failed (a); input value 90→50 → failed (b); dropped `checked` from the wildcards toggle → failed
+  (c); removed `@keyframes spin` → failed (d). All four AssertionErrors fired; clean run = 12/12.
+- Files changed: scripts/verify-controls.mjs (12th check + readFileSync import + `root` path const),
+  src/adapters/CLAUDE.md (documented the index.html-contract seam under the verify:controls bullet).
+- **Learnings for future iterations:**
+  - A headless adapter gate built entirely on FAKES has a blind spot: the real markup it will run
+    against. Add ONE check that reads the live index.html and asserts the adapter↔markup contract
+    (ids that `fromDocument` resolves; AC-mandated attributes the fakes hard-code). This is the
+    cheapest guard against the "renamed an id / changed a default in index.html only" regression that
+    no fake-element test can catch and that this env can't catch in a browser.
+  - Parse index.html WITHOUT a DOM lib (zero runtime deps): `tagWithId(id)` =
+    `html.match(/<[^>]*\bid=["']${id}["'][^>]*>/i)?.[0]` (one tag, no nested ">"), then `attr(tag,name)`
+    / `hasBoolAttr(tag,name)` regexes on that tag. Robust to whitespace, good enough for drift
+    detection (not full DOM parsing).
+  - The adapter's clamp bounds (MIN/MAX/DEFAULT_WAYPOINTS) are module-PRIVATE (only `CONTROL_IDS` is
+    exported). Per the codebase pattern, that's fine — the gate hard-codes the AC golden values
+    (10/90/90) rather than importing source constants, so a wrong-but-consistent change to both the
+    constant and the markup still fails the gate.

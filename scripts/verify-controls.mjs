@@ -13,8 +13,10 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { readFileSync } from "node:fs";
 
-const dist = resolve(dirname(fileURLToPath(import.meta.url)), "../dist/src");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const dist = resolve(root, "dist/src");
 const { DomControls, CONTROL_IDS } = await import(`${dist}/adapters/dom-controls.js`);
 const { GenerateWalk } = await import(`${dist}/application/generate-walk.js`);
 const { ClearWalk } = await import(`${dist}/application/clear-walk.js`);
@@ -360,6 +362,51 @@ function ok(label) {
     "fromDocument throws a clear error when an element is missing"
   );
   ok("fromDocument resolves controls by id and fails loudly on a missing element");
+}
+
+// ── AC: the LIVE index.html markup matches the adapter contract (the one un-faked seam) ──
+// Every other check above uses fake elements / a fake document, so a drift between CONTROL_IDS and
+// the real ids in index.html — or a change to the AC-mandated markup (input range/default, toggle
+// defaults, overlay spinner+text) — would only blow up in the live browser (no MCP here) while the
+// harness stayed green. This block reads the real index.html and asserts that contract. AC golden
+// values (10/90/90, "Generating...") are HARD-CODED here, NOT imported, so a drift in the source
+// fails the gate instead of being silently agreed with (the pattern in src/adapters/CLAUDE.md).
+{
+  const html = readFileSync(resolve(root, "index.html"), "utf8");
+
+  // The single tag (no nested ">") carrying a given id, or null.
+  const tagWithId = (id) =>
+    html.match(new RegExp(`<[^>]*\\bid=["']${id}["'][^>]*>`, "i"))?.[0] ?? null;
+  const attr = (tag, name) =>
+    tag.match(new RegExp(`\\b${name}=["']([^"']*)["']`, "i"))?.[1] ?? null;
+  const hasBoolAttr = (tag, name) => new RegExp(`\\b${name}\\b`, "i").test(tag);
+
+  // 1. Every element fromDocument() resolves by CONTROL_IDS must actually exist in index.html, or
+  //    the live app throws "required element not found" at startup (untested by the fake-doc check).
+  for (const [key, id] of Object.entries(CONTROL_IDS)) {
+    assert.ok(tagWithId(id), `index.html has an element #${id} for CONTROL_IDS.${key}`);
+  }
+
+  // 2. Waypoint input: number, range 10-90, default 90 (AC) — tied to the adapter's clamp/default.
+  const input = tagWithId(CONTROL_IDS.waypointInput);
+  assert.equal(attr(input, "type"), "number", "waypoint input is a number input");
+  assert.equal(attr(input, "min"), "10", 'waypoint input min="10"');
+  assert.equal(attr(input, "max"), "90", 'waypoint input max="90"');
+  assert.equal(attr(input, "value"), "90", 'waypoint input default value="90"');
+
+  // 3. Both toggles are checkboxes, checked by default (AC: rings/labels "visible by default").
+  for (const key of ["wildcardsToggle", "turnsToggle"]) {
+    const toggle = tagWithId(CONTROL_IDS[key]);
+    assert.equal(attr(toggle, "type"), "checkbox", `${key} is a checkbox`);
+    assert.ok(hasBoolAttr(toggle, "checked"), `${key} is checked by default`);
+  }
+
+  // 4. The loading overlay (AC2: "spinner + 'Generating...'") has the spinner element, the text, and
+  //    the pure-CSS keyframes that animate it once GenerateWalk frees the event loop.
+  assert.ok(/class=["']spinner["']/.test(html), "overlay has a .spinner element");
+  assert.ok(/Generating\.\.\./.test(html), 'overlay shows the "Generating..." text');
+  assert.ok(/@keyframes\s+spin\b/.test(html), "spinner has its @keyframes spin animation");
+  ok("index.html markup matches the adapter contract (ids, input range/default, toggles, overlay)");
 }
 
 console.log(`\nAll ${passed} DOM-controls checks passed.`);

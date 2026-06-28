@@ -67,6 +67,17 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   `fromDocument` resolves by id + throws on a missing element. **Extend it** when US-017 (tooltip/hover)
   and US-020 (failure error overlay) add to this adapter. NOTE: `window.print` is a global — the harness
   stubs `globalThis.window` around the print check; the adapter reads `window` at call time.
+- **The one un-faked seam — index.html ↔ adapter contract.** Every behaviour check uses FAKE elements
+  and a FAKE document, so a drift between `CONTROL_IDS` and the real ids in `index.html` (or a change to
+  AC-mandated markup) would only blow up in the live browser — which can't be tested here — while the
+  harness stayed green. `verify:controls` therefore reads the REAL `index.html` and asserts: every
+  `CONTROL_IDS` value exists as an `id` (so `fromDocument` won't throw at startup); the waypoint input is
+  `type=number min=10 max=90 value=90` (AC "range 10-90, default 90"); both toggles are checkboxes
+  `checked` by default (AC "visible by default"); and the overlay has a `.spinner`, the "Generating..."
+  text, and its `@keyframes spin` (AC2). The golden values (10/90/90, "Generating...") are HARD-CODED in
+  the harness, NOT imported, so a drift in the markup fails the gate. Proven to bite (rename an id /
+  change the default / drop `checked` / remove the keyframes → the gate fails; reverted). When you
+  ADD/RENAME a control id or change its AC-mandated markup, update BOTH `index.html` and this check.
 - CAVEAT (carried from US-013/14/15): a LIVE browser screenshot for human sign-off is still pending —
   no browser/Playwright MCP in this env, and the controls only become interactive once US-021 wires
   main.ts (composition root + auto-generate-on-load). The headless harness stands in for the functional
