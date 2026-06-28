@@ -153,8 +153,10 @@ export class CanvasRenderer implements InteractiveRenderer {
   /**
    * Map a viewport (client) coordinate to the waypoint under it, or null when the point is over empty
    * canvas (US-017 / docs/adr/0005). Inverts BOTH transforms in turn:
-   *  1. the canvas element's CSS scale (viewport → backing store), from {@link getBoundingClientRect}
-   *     — the element may be displayed smaller than its 794×1123 backing store on a narrow viewport;
+   *  1. the canvas element's CSS scale (viewport → backing store), from `getBoundingClientRect` — the
+   *     element may be displayed smaller than its 794×1123 backing store on a narrow viewport. The
+   *     rect is the BORDER box, so the element's border (index.html's 1px) is removed first so the
+   *     CONTENT box, which is what the backing store maps to, is the one that is scaled;
    *  2. the A4 fit (backing store → generation space), from the stored {@link fit}.
    * Returns the nearest waypoint whose circle (radius {@link WAYPOINT_RADIUS}) contains the point.
    * Null before the first draw / after clear, or when the element has no layout box (zero-sized).
@@ -164,12 +166,24 @@ export class CanvasRenderer implements InteractiveRenderer {
     const fit = this.fit;
     if (walk === null || fit === null) return null;
 
-    const rect = this.canvas.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return null;
+    const canvas = this.canvas;
+    const rect = canvas.getBoundingClientRect();
 
     // viewport → backing store: undo the CSS element scale (index.html's `canvas { max-width: 100% }`).
-    const backingX = ((clientX - rect.left) / rect.width) * this.canvas.width;
-    const backingY = ((clientY - rect.top) / rect.height) * this.canvas.height;
+    // getBoundingClientRect() returns the element's BORDER box, but the backing store maps to its
+    // CONTENT box — index.html gives the canvas a 1px border. So subtract the (uniform) border
+    // (clientLeft/clientTop) from the origin and from both sides of the size before scaling, or the
+    // mapping is skewed off-centre — increasingly so the more the element is CSS-downscaled, since the
+    // border does not scale with the content. clientLeft/clientTop are 0 on an unbordered canvas, where
+    // this reduces to the plain border-box mapping.
+    const borderX = canvas.clientLeft;
+    const borderY = canvas.clientTop;
+    const contentW = rect.width - 2 * borderX;
+    const contentH = rect.height - 2 * borderY;
+    if (contentW <= 0 || contentH <= 0) return null;
+
+    const backingX = ((clientX - rect.left - borderX) / contentW) * canvas.width;
+    const backingY = ((clientY - rect.top - borderY) / contentH) * canvas.height;
 
     // backing store → generation space: undo the A4 fit (translate → scale → translate).
     const genX = (backingX - fit.offsetX) / fit.scale + fit.minX;

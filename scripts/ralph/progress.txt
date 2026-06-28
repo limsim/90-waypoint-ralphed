@@ -292,6 +292,21 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   Also: when a terminal/branch enum has N cases (turnDescription: start/end/wildcard/L/R), click a
   waypoint of EACH kind — the End ("none (end)") branch was long untested because only Start+wildcard
   +interior were exercised; the End wp also cross-checks distance === walk.totalDistance.
+- `getBoundingClientRect()` returns the element's BORDER box, but a canvas's backing store maps to its
+  CONTENT box — and index.html gives `#walk-canvas` a 1px border. So `CanvasRenderer.hitTest`'s
+  viewport→backing inversion must subtract the (uniform) border from BOTH the origin and the size:
+  `borderX = canvas.clientLeft; contentW = rect.width - 2*borderX; backing = (client - rect.left -
+  borderX) / contentW * canvas.width` (same for Y). Ignoring the border skews the mapping off-centre —
+  negligible at full size with a 1px border, but the error GROWS as the element is CSS-downscaled
+  (the border does NOT scale with the content). `clientLeft/clientTop` are 0 on an unbordered canvas,
+  so this reduces to the plain border-box mapping. To VERIFY headlessly, `verify:renderer`'s
+  `verifyHitTest(count, seed, rect, border=0)` fakes a bordered canvas (`rect` is the border box =
+  content + 2*border, with matching `clientLeft/clientTop/clientWidth/clientHeight`) and derives the
+  client coords through the CONTENT box; a `border 24` half-size case proves the correction (reverting
+  to `(client - rect.left)/rect.width` fails it — outer waypoints fall outside WAYPOINT_RADIUS of
+  their true centre — while every `border 0` case still passes). GOTCHA proving it bites: the CENTER of
+  the canvas maps exactly even WITHOUT the fix (symmetric border cancels), so the proof needs OFF-CENTRE
+  waypoints on a CSS-downscaled element — a click at the middle would pass either way.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -1588,4 +1603,46 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - Reverting a "prove it bites" tweak on the UNCOMMITTED story files: use a precise reverse Edit, NOT
     `git checkout <file>` (which would wipe the whole story's uncommitted work), then `npm run clean`
     before re-running so incremental `tsc -b` doesn't keep a stale dist (mtime-after-revert gotcha).
+---
+
+## 2026-06-28 - US-017 (Waypoint click tooltip and hover highlighting) — REFINEMENT
+- US-017 already passed; re-verified all acceptance criteria green end to end (npm test 243 pass;
+  verify:renderer all assertions; verify:controls 22/22; typecheck clean) before refining.
+- Refinement (impl + harness): made `CanvasRenderer.hitTest` BORDER-AWARE — a genuine AC3
+  ("hit-testing inverts both transforms: viewport → A4 → generation") correctness fix.
+  - The bug: `getBoundingClientRect()` returns the element's BORDER box, but a canvas's backing store
+    maps to its CONTENT box, and index.html gives `#walk-canvas` a 1px border. The old inversion used
+    `(client - rect.left) / rect.width * canvas.width`, treating the border box AS the content box —
+    so the viewport→backing mapping was skewed off-centre. Negligible at full size with a 1px border
+    (sub-pixel), but the error GROWS as the canvas element is CSS-downscaled on a narrow viewport
+    (US-015's `canvas { max-width: 100% }`), because the border does NOT scale with the content.
+  - The fix: subtract the (uniform) border from BOTH the origin and the size before scaling —
+    `borderX = canvas.clientLeft; contentW = rect.width - 2*borderX; backing = (client - rect.left -
+    borderX) / contentW * canvas.width` (same for Y); guard `contentW/contentH <= 0` (replaces the old
+    `rect.width === 0` guard). `clientLeft/clientTop` are 0 on an unbordered canvas, so this reduces to
+    the prior border-box mapping (no behavioural change where there is no border).
+- Files changed:
+  - src/adapters/canvas-renderer.ts (hitTest border-box → content-box correction + doc comment)
+  - scripts/verify-renderer.mjs (verifyHitTest gained an optional `border` param: the fake canvas now
+    models a border box with matching clientLeft/clientTop/clientWidth/clientHeight, and the client
+    coords are derived through the CONTENT box; added a `border 24` + half-size count=90 call site)
+  - src/adapters/CLAUDE.md (documented the border correction under the hitTest section)
+  - scripts/ralph/progress.txt (this entry + a Codebase Patterns bullet)
+- PROVEN TO BITE then reverted via precise Edit (NOT git checkout — files uncommitted): reverting
+  hitTest to `(client - rect.left) / rect.width` failed the new `border 24` case at wp1 (an outer
+  waypoint no longer within WAYPOINT_RADIUS of its true centre) while every `border 0` case still
+  passed; restored + `npm run clean` + re-ran all gates green.
+- **Learnings for future iterations:**
+  - `getBoundingClientRect()` is the BORDER box; a canvas backing store maps to the CONTENT box. Any
+    screen→canvas inversion must remove the element border (`clientLeft`/`clientTop`) from the origin
+    AND the size, or it skews — worse the more the element is CSS-scaled (borders don't scale).
+  - Proof-of-bite for a symmetric-border mapping error needs OFF-CENTRE targets on a downscaled
+    element: the canvas CENTRE maps exactly even with the bug (the symmetric border cancels), so a
+    click in the middle would pass either way. The verify harness clicks every waypoint's centre, and
+    the outer ones are what fail under the regression.
+  - The change is confined to the renderer's hitTest; verify:controls uses a FAKE renderer (its own
+    hitTarget), so it was unaffected — only verify:renderer (which drives the REAL CanvasRenderer)
+    needed the bordered-canvas fake. dom-controls' tooltip POSITIONING (clientX - rect.left + offset,
+    relative to the canvas-wrap) is intentionally NOT border-corrected: it only needs to land near the
+    click (already offset 12px), not invert to a generation coordinate.
 ---

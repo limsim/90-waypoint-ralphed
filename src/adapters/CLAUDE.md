@@ -35,12 +35,25 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
   every `Renderer` fake (e.g. `tests/clear-walk.test.ts`) to grow for a capability it never uses.
 - **hitTest inverts BOTH transforms** (AC: "viewport → A4 → generation"): (1) the canvas element's CSS
   scale — `getBoundingClientRect()` gives the displayed rect, which on a narrow viewport is smaller than
-  the 794×1123 backing store (`canvas { max-width: 100% }`), so `backing = (client − rect.origin) /
-  rect.size * canvas.size`; (2) the A4 fit — `gen = (backing − offset) / scale + min`, inverting the
+  the 794×1123 backing store (`canvas { max-width: 100% }`), so `backing = (client − contentOrigin) /
+  contentSize * canvas.size`; (2) the A4 fit — `gen = (backing − offset) / scale + min`, inverting the
   `translate→scale→translate` `draw` applies. `CanvasRenderer` therefore REMEMBERS the last walk +
   the fit `{scale, offsetX, offsetY, minX, minY}` (set in the shared `render()`, nulled in `clear()`),
   and finds the nearest waypoint within `WAYPOINT_RADIUS`. Returns null before any draw / over empty
   canvas. The layout invariant (circles ≥ 50px apart) makes the hit unique.
+  - GOTCHA — `getBoundingClientRect()` returns the **border box**, but the backing store maps to the
+    **content box**, and index.html gives the canvas a 1px border. So hitTest subtracts the (uniform)
+    border from BOTH the origin and the size before scaling: `borderX = canvas.clientLeft`,
+    `contentW = rect.width − 2·borderX`, `backing = (client − rect.left − borderX) / contentW *
+    canvas.width`. Ignoring the border skews the mapping off-centre — negligibly at full size with a
+    1px border (sub-pixel), but the error GROWS the more the element is CSS-downscaled, because the
+    border does NOT scale with the content. `clientLeft/clientTop` are 0 on an unbordered canvas, where
+    this reduces to the plain border-box mapping. `verify:renderer`'s `verifyHitTest` takes an optional
+    `border`: the fake canvas's `rect` is the border box (`content + 2·border`) with matching
+    `clientLeft/clientTop/clientWidth/clientHeight`, and a `border 24` + half-size case derives the
+    client coords through the CONTENT box. Proven to bite — reverting hitTest to the border-box mapping
+    (`(client − rect.left) / rect.width`) fails the `border 24` case (outer waypoints no longer within
+    `WAYPOINT_RADIUS` of their true centre) while every `border 0` case still passes.
 - **draw/highlight share one `render()`.** `draw(walk, options)` stores walk+options, resets the
   highlight (a fresh picture has no hover), and calls `render()`; `highlight(wp|null)` sets the hover
   and calls `render()` (no-op if no walk). `render()` computes + stores the fit ONCE. The hovered

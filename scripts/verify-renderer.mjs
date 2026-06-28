@@ -494,33 +494,45 @@ function verifyA4CapOnLargerCanvas(count, seed) {
  * for every waypoint it takes the recorded SCREEN (backing-store) centre, converts it to a CLIENT
  * coordinate through the given rect (which may be CSS-scaled and offset — that is exactly what hitTest
  * must undo), and asserts hitTest returns that waypoint. A half-size, offset rect exercises the
- * viewport-scale inversion; an A4-downscaled walk (count=90) exercises the A4-fit inversion. Also
- * asserts a click over empty canvas → null.
+ * viewport-scale inversion; an A4-downscaled walk (count=90) exercises the A4-fit inversion. A
+ * non-zero `border` exercises the border-box → content-box correction (getBoundingClientRect returns
+ * the BORDER box, but the backing store maps to the CONTENT box — index.html's canvas has a 1px
+ * border). Also asserts a click over empty canvas → null.
  */
-function verifyHitTest(count, seed, rect) {
+function verifyHitTest(count, seed, rect, border = 0) {
   const walk = generateWalk(count, seed);
   const { ctx, ops } = makeFakeContext();
-  const canvas = { width: CANVAS_W, height: CANVAS_H, getContext: () => ctx, getBoundingClientRect: () => rect };
+  // The fake canvas models a bordered element: `rect` (from getBoundingClientRect) is the BORDER box,
+  // while clientLeft/clientTop are the (uniform) border widths and clientWidth/clientHeight describe
+  // the CONTENT box the backing store maps to. hitTest must invert via the content box, not the rect.
+  const contentW = rect.width - 2 * border;
+  const contentH = rect.height - 2 * border;
+  const canvas = {
+    width: CANVAS_W, height: CANVAS_H, getContext: () => ctx, getBoundingClientRect: () => rect,
+    clientLeft: border, clientTop: border, clientWidth: contentW, clientHeight: contentH,
+  };
   const renderer = new CanvasRenderer(canvas);
   renderer.draw(walk, { showWildcards: true, showTurns: true });
 
-  const scaleX = rect.width / CANVAS_W; // CSS element scale (backing store px → displayed px)
-  const scaleY = rect.height / CANVAS_H;
+  const contentLeft = rect.left + border; // client-space origin of the content box (inside the border)
+  const contentTop = rect.top + border;
+  const scaleX = contentW / CANVAS_W; // CSS content-box scale (backing store px → displayed px)
+  const scaleY = contentH / CANVAS_H;
   for (const wp of walk.waypoints) {
     const circle = ops.find((o) => o.op === "arc" && o.r === WAYPOINT_RADIUS && o.lx === wp.position.x && o.ly === wp.position.y);
     assert.ok(circle, `wp${wp.sequenceNumber} drew a circle (recorded screen centre)`);
-    // backing-store screen centre → client coordinate (the inverse of what hitTest must undo).
-    const clientX = rect.left + circle.x * scaleX;
-    const clientY = rect.top + circle.y * scaleY;
+    // backing-store screen centre → client coordinate through the CONTENT box (the inverse of hitTest).
+    const clientX = contentLeft + circle.x * scaleX;
+    const clientY = contentTop + circle.y * scaleY;
     const hit = renderer.hitTest(clientX, clientY);
     assert.ok(hit, `hitTest returns a waypoint at wp${wp.sequenceNumber}'s screen centre`);
     assert.equal(hit.sequenceNumber, wp.sequenceNumber, `hitTest maps the click back to wp${wp.sequenceNumber} (inverts viewport→A4→generation)`);
   }
-  // The canvas's top-left corner maps to a generation point at least one padding (100px) outside the
-  // waypoints' bounding box, so it is over no waypoint → null.
-  assert.equal(renderer.hitTest(rect.left, rect.top), null, "a click over empty canvas returns null");
+  // The content box's top-left corner maps to a generation point at least one padding (100px) outside
+  // the waypoints' bounding box, so it is over no waypoint → null.
+  assert.equal(renderer.hitTest(contentLeft, contentTop), null, "a click over empty canvas returns null");
 
-  console.log(`  ✓ count=${count} seed=${seed} rect ${rect.width}×${rect.height}@(${rect.left},${rect.top}): every waypoint hit-tested back, empty→null`);
+  console.log(`  ✓ count=${count} seed=${seed} rect ${rect.width}×${rect.height}@(${rect.left},${rect.top}) border ${border}: every waypoint hit-tested back, empty→null`);
 }
 
 /**
@@ -656,6 +668,12 @@ console.log("US-017 hit-testing (invert viewport→A4→generation) + hover high
 verifyHitTest(10, 4242, { left: 0, top: 0, width: CANVAS_W, height: CANVAS_H });
 verifyHitTest(90, 4242, { left: 0, top: 0, width: CANVAS_W, height: CANVAS_H });
 verifyHitTest(90, 4242, { left: 37, top: 21, width: CANVAS_W / 2, height: CANVAS_H / 2 }); // CSS-scaled + offset
+// CSS-scaled + offset + a thick border: the rect (border box) is 2*border wider/taller than the
+// content box, so hitTest must remove the border (getBoundingClientRect includes it) or the mapping
+// skews off-centre — proven to bite (drop the border subtraction → the outer waypoints, no longer
+// within WAYPOINT_RADIUS of their true centre, fail to hit-test back). The real canvas border is 1px;
+// 24px here makes the correction unmistakable.
+verifyHitTest(90, 4242, { left: 37, top: 21, width: CANVAS_W / 2 + 48, height: CANVAS_H / 2 + 48 }, 24);
 verifyHitTestBeforeDraw();
 verifyHighlight(20, 99);
 verifyHighlight(90, 4242);
