@@ -163,6 +163,11 @@ DOM types — that's enforced mechanically (`tsconfig.core.json` has `lib: ["ES2
 - Implements the `Renderer` port (`src/application/renderer-port.ts`): `draw(walk, options)` + `clear()`.
 - Imports `WAYPOINT_RADIUS` from `domain/layout-rules.js` so the DRAWN circle radius is the SAME
   single source of truth as the layout invariant — never hard-code 25 here.
+- **Colour constants ↔ legend (US-018).** The symbol colours (`TERMINAL_FILL` #000000, `WAYPOINT_FILL`
+  #ffffff, `WAYPOINT_BORDER` #000000, `WILDCARD_RING_COLOUR` #ff8c00) are MIRRORED by the legend swatches
+  in `index.html` (`.swatch-terminal/-waypoint/-wildcard`). If you change one of these, update the
+  matching legend swatch CSS too — `verify:controls` reads BOTH this source file and the legend CSS and
+  anchors each to the same hard-coded golden set, so a drift on either side fails the gate.
 - Coordinate transform: content box = `walk.boundingBox` grown by `GRID_PADDING` (100px) each side.
   `draw` fills the background white in SCREEN space (identity transform) THEN applies the **US-015**
   A4-fit transform inside a `save`/`restore`: `translate(offsetX, offsetY)` → `scale(s, s)` →

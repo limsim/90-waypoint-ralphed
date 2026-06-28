@@ -504,8 +504,9 @@ function ok(label) {
   // 6. Legend (US-018): a DOM/HTML legend BELOW the canvas (not canvas-painted) with three entries —
   //    Start/End, Waypoint, Wildcard — whose swatches MIRROR the canvas symbol colours. There is no
   //    other gate for it (the legend is static markup; the adapter never touches it), so this is its
-  //    regression check. Golden colours are HARD-CODED here, NOT imported, so a drift in either the
-  //    canvas-renderer constants OR the legend CSS fails the gate. "Below the canvas" is document order.
+  //    regression check. Golden colours are HARD-CODED here, NOT imported; the gate reads BOTH the
+  //    legend CSS (index.html) AND the renderer constants (canvas-renderer.ts) and anchors each to the
+  //    same golden set, so a drift on EITHER side fails. "Below the canvas" is document order.
   assert.ok(tagWithId("legend"), "index.html has a #legend element");
   const canvasAt = html.search(new RegExp(`\\bid=["']${CONTROL_IDS.canvas}["']`, "i"));
   const legendAt = html.search(/\bid=["']legend["']/i);
@@ -541,6 +542,27 @@ function ok(label) {
   assert.ok(/swatch-waypoint\s*\{[^}]*border:[^;}]*#000000/i.test(html), "Waypoint swatch has a black border (#000000)");
   assert.ok(/swatch-wildcard\s*\{[^}]*border:[^;}]*#ff8c00/i.test(html), "Wildcard swatch is an orange ring (#ff8c00 border)");
   assert.ok(/\.legend\s+\.swatch\s*\{[^}]*border-radius:\s*50%/i.test(html), "legend swatches are circular (border-radius: 50%)");
+
+  // The legend exists to MIRROR the canvas symbols, and the CSS carries a "keep in sync" comment — so
+  // the gate must also catch a drift on the RENDERER side, not just the legend CSS. Read the REAL
+  // canvas-renderer.ts source and assert its colour constants equal the SAME hard-coded golden values
+  // the legend swatches were checked against above. Anchoring BOTH files to one golden set proves,
+  // transitively, legend === renderer AND both === the AC spec: a drift in the legend fails the CSS
+  // checks above; a drift in WILDCARD_RING_COLOUR/TERMINAL_FILL/etc. (which would silently leave the
+  // legend showing a colour the canvas no longer draws) fails the checks here. We read the .ts source
+  // (not the compiled dist) because these are private module-level consts, not exports.
+  const rendererSrc = readFileSync(resolve(root, "src/adapters/canvas-renderer.ts"), "utf8");
+  const rendererColour = (name) =>
+    rendererSrc.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i"))?.[1]?.toLowerCase() ?? null;
+  const RENDERER_GOLDEN = {
+    TERMINAL_FILL: "#000000", // Start/End swatch fill
+    WAYPOINT_FILL: "#ffffff", // Waypoint swatch fill
+    WAYPOINT_BORDER: "#000000", // Waypoint swatch border
+    WILDCARD_RING_COLOUR: "#ff8c00", // Wildcard swatch ring
+  };
+  for (const [name, want] of Object.entries(RENDERER_GOLDEN)) {
+    assert.equal(rendererColour(name), want, `canvas-renderer ${name} is ${want} — legend swatch mirrors it (keep in sync)`);
+  }
   ok("Legend (US-018): DOM/HTML below the canvas, three entries, swatches mirror the canvas colours");
 }
 

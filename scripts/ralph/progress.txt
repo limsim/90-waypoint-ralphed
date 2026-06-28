@@ -314,9 +314,15 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   wildcard #ff8c00 orange ring) — keep them in sync (a CSS comment flags this). Because no test code
   imports markup, its ONLY regression gate is `verify:controls`' index.html-markup block (item 6): it
   reads the real index.html and asserts the legend exists, sits after the canvas in document order,
-  carries all three AC labels, and its swatch CSS has the golden hex colours — golden values HARD-CODED
-  (not imported) so a drift in EITHER the legend CSS or the renderer constants fails the gate. US-019's
-  print stylesheet must KEEP #legend visible while hiding the other chrome (controls/overlay/tooltip).
+  carries all three AC labels, and its swatch CSS has the golden hex colours. The gate reads BOTH the
+  legend CSS (index.html) AND the renderer colour constants (src/adapters/canvas-renderer.ts source —
+  they're private module consts, not exports, so it greps the .ts) and anchors EACH to the SAME
+  hard-coded golden set (terminal #000000, waypoint #ffffff fill + #000000 border, wildcard #ff8c00) —
+  so a drift on EITHER side fails (transitively legend===renderer===AC spec). This makes the "keep in
+  sync" CSS comment REAL: a renderer drift (e.g. WILDCARD_RING_COLOUR→#ff6600) leaves the legend showing
+  a colour the canvas no longer draws and now fails the gate (proven to bite). Earlier passes only read
+  the legend CSS, so a renderer-constant drift slipped through despite the comment claiming otherwise.
+  US-019's print stylesheet must KEEP #legend visible while hiding the other chrome (controls/overlay/tooltip).
   GOTCHA (US-018 refinement): when asserting a label is present in a SPECIFIC DOM region, SCOPE the
   search to that region's markup block, not the whole HTML — a label can be a substring of unrelated
   chrome text and satisfy an unscoped `html.includes(label)` vacuously ("Waypoint" is a substring of
@@ -1725,4 +1731,39 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     inside one entry. Same lesson applies to any future static-markup AC gate (US-019 print stylesheet).
   - The legend markup itself needed no change across refinements — it was correct from US-018's first
     pass; the value of the refinement passes has been tightening the gate that protects it.
+---
+
+## 2026-06-28 03:41 BST - US-018 (Legend (DOM/HTML)) — REFINEMENT 3
+- US-018 already passed; re-verified all ACs green (legend = three correctly-labelled entries below the
+  canvas, swatches mirror the canvas symbol colours; typecheck clean; screenshot caveat unchanged — no
+  browser MCP). The legend markup/CSS in index.html was correct and unchanged.
+- Closed a REAL gap in the gate that the prior passes (and the Codebase-Patterns note) MIS-CLAIMED was
+  covered. Item 6's comment said "a drift in EITHER the legend CSS or the renderer constants fails the
+  gate", but the gate only ever read index.html — it NEVER read canvas-renderer.ts. So a drift in a
+  renderer colour constant (e.g. WILDCARD_RING_COLOUR #ff8c00 → #ff6600) would silently leave the legend
+  showing a colour the canvas no longer draws (the legend's WHOLE PURPOSE is to mirror the canvas
+  symbols, and a CSS comment explicitly flags "keep in sync"), yet the gate stayed green.
+- Fix (scripts/verify-controls.mjs item 6): the gate now ALSO reads the REAL src/adapters/canvas-renderer.ts
+  source (the colours are private module consts, not exports, so it greps the .ts not dist/) and asserts
+  each of TERMINAL_FILL/WAYPOINT_FILL/WAYPOINT_BORDER/WILDCARD_RING_COLOUR equals the SAME hard-coded
+  golden value the legend swatches are checked against above. Anchoring BOTH files to one golden set
+  proves transitively legend===renderer AND both===AC spec: a legend drift fails the existing CSS checks;
+  a renderer drift fails the new checks. Updated the item-6 comment to say the gate reads BOTH files.
+- Files changed: scripts/verify-controls.mjs (+24/-2: renderer-constant cross-check + comment);
+  src/adapters/CLAUDE.md (canvas-renderer "Colour constants ↔ legend" sync note); scripts/ralph/progress.txt
+  (this entry + the Codebase-Patterns legend bullet corrected). No change to index.html or any src/*.ts.
+- Verified: npm run clean + tsc -b clean (typecheck); npm test 243 pass (no regressions — gate/markup only);
+  verify:renderer green; verify:controls 23/23. PROVEN the new check bites: temporarily setting
+  WILDCARD_RING_COLOUR → #ff6600, rebuilding, and running the gate fired the AssertionError (expected
+  '#ff8c00') and the node process exited 1; reverted via a precise Edit (NOT git checkout — verify-controls.mjs
+  was uncommitted) + npm run clean, re-ran → 23/23 green.
+- **Learnings for future iterations:**
+  - When one file's value MIRRORS another's (legend swatch ↔ renderer colour const, "keep in sync"
+    comment), a gate that reads only ONE file can't catch a drift in the OTHER — even though the mirror is
+    the whole point. Read BOTH and anchor each to one HARD-CODED golden value: a drift on either side then
+    fails, and the golden anchor also pins both to the AC spec (catches a both-sides-in-step drift a
+    direct A==B comparison would pass). Re-verify any comment that CLAIMS a gate covers something —
+    here the claim had been false across two prior "refinement" passes.
+  - The renderer colour constants are PRIVATE module consts (not exported), so the gate greps the .ts
+    SOURCE (`/\bNAME\s*=\s*["']([^"']*)["']/i`), not the compiled dist — runtime import would fail.
 ---
