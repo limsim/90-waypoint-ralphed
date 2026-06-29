@@ -12,13 +12,16 @@ import {
   MIN_SEGMENT_WAYPOINT_CLEARANCE,
   TURN_LABEL_OFFSET,
   TURN_LABEL_CLEARANCE,
+  TURN_LABEL_RADIUS,
   BOUNDS_PADDING,
+  turnLabelPoint,
   noWaypointCirclesOverlap,
   nonAdjacentWaypointsKeepMinGap,
   noCloseParallelSegments,
   noSegmentCloseToNonAdjacentWaypoint,
   noSegmentThroughNonAdjacentWaypointCircle,
   turnLabelsClearOfNonAdjacentSegments,
+  turnLabelsClearOfNonAdjacentWaypoints,
   allWaypointsWithinBounds,
   checkLayout,
 } from "../src/domain/layout-rules.js";
@@ -47,11 +50,16 @@ test("layout-rules: constants have expected values", () => {
   assert.equal(MIN_SEGMENT_WAYPOINT_CLEARANCE, 35);
   assert.equal(TURN_LABEL_OFFSET, 46);
   assert.equal(TURN_LABEL_CLEARANCE, 8);
+  assert.equal(TURN_LABEL_RADIUS, 10);
   assert.equal(BOUNDS_PADDING, 30);
 });
 
 test("layout-rules: the non-adjacent min separation is 2*radius + gap = 70px", () => {
   assert.equal(2 * WAYPOINT_RADIUS + MIN_WAYPOINT_GAP, 70);
+});
+
+test("layout-rules: the label-vs-waypoint clearance is radius + label + clearance = 43px", () => {
+  assert.equal(WAYPOINT_RADIUS + TURN_LABEL_RADIUS + TURN_LABEL_CLEARANCE, 43);
 });
 
 // ---- noWaypointCirclesOverlap ----
@@ -157,6 +165,114 @@ test("nonAdjacentWaypointsKeepMinGap: one too-close pair among many well-spaced 
     mkWp(4, 4, 0, 64),
   ];
   assert.equal(nonAdjacentWaypointsKeepMinGap(wps), false);
+});
+
+// ---- turnLabelsClearOfNonAdjacentWaypoints (US-024 / ADR-0008) ----
+// An interior waypoint's NE label must sit >= 43px (radius 25 + label disc 10 + clearance 8) from
+// every NON-adjacent waypoint's centre. Adjacent waypoints (|i-j| <= 1) are exempt; the protected
+// circle may be terminal (the label owner may not). A 4-waypoint walk is the smallest with a
+// non-adjacent label/circle pair (owner index 1, protected index 3); index 2 is an adjacent filler.
+
+test("turnLabelsClearOfNonAdjacentWaypoints: a non-adjacent circle exactly 43px from the label passes (boundary)", () => {
+  const label = turnLabelPoint(new Point(0, 0));
+  const wps = [
+    mkWp(1, 4, 0, 400), // start (terminal)
+    mkWp(2, 4, 0, 0), // owner (interior); NE label = turnLabelPoint(0,0)
+    mkWp(3, 4, 400, 0), // adjacent filler (interior), far from everything
+    mkWp(4, 4, label.x + 43, label.y), // protected (terminal), exactly 43px due East of the label
+  ];
+  assert.equal(turnLabelsClearOfNonAdjacentWaypoints(wps), true);
+});
+
+test("turnLabelsClearOfNonAdjacentWaypoints: a non-adjacent circle 42px from the label fails (boundary)", () => {
+  const label = turnLabelPoint(new Point(0, 0));
+  const wps = [
+    mkWp(1, 4, 0, 400),
+    mkWp(2, 4, 0, 0),
+    mkWp(3, 4, 400, 0),
+    mkWp(4, 4, label.x + 42, label.y), // 42px < 43px
+  ];
+  assert.equal(turnLabelsClearOfNonAdjacentWaypoints(wps), false);
+});
+
+test("turnLabelsClearOfNonAdjacentWaypoints: an adjacent N neighbour at the 60px min segment is exempt (load-bearing)", () => {
+  // Owner = interior wp[1] at (0,0). Its adjacent successor wp[2] sits due North at 60px (the min
+  // segment) — ~42.58px from the NE label, just inside 43px. Because wp[2] is ADJACENT (|1-2|=1) it
+  // is exempt; without the exemption this legitimate near-floor placement would be wrongly flagged.
+  const label = turnLabelPoint(new Point(0, 0));
+  const wps = [mkWp(1, 3, 0, 60), mkWp(2, 3, 0, 0), mkWp(3, 3, 0, -60)];
+  const d = Math.hypot(wps[2].position.x - label.x, wps[2].position.y - label.y);
+  // The adjacent label/circle distance is genuinely below the 43px floor, so the exemption does real
+  // work here (this is not a vacuous >= 43 case that would pass with or without the clause).
+  assert.ok(d > 42 && d < 43, `expected ~42.58px, got ${d.toFixed(2)}`);
+  assert.equal(turnLabelsClearOfNonAdjacentWaypoints(wps), true);
+});
+
+test("turnLabelsClearOfNonAdjacentWaypoints: a wildcard (W) interior label owner is still checked", () => {
+  // A wildcard owns a 'W' label, so it must be checked like any interior owner (a bug that skipped
+  // null-turn waypoints would miss it). wp[1] is a wildcard; wp[3] sits 30px from its label.
+  const label = turnLabelPoint(new Point(0, 0));
+  const wps = [
+    mkWp(1, 4, 0, 400),
+    mkWp(2, 4, 0, 0, null, true), // wildcard owner (interior, null turn)
+    mkWp(3, 4, 400, 0),
+    mkWp(4, 4, label.x + 30, label.y),
+  ];
+  assert.equal(wps[1].wildcard, true);
+  assert.equal(turnLabelsClearOfNonAdjacentWaypoints(wps), false);
+});
+
+test("turnLabelsClearOfNonAdjacentWaypoints: a TERMINAL waypoint circle is protected (not skipped)", () => {
+  // The label OWNER must be interior, but the PROTECTED circle may be terminal. Owner = interior
+  // wp[1]; the non-adjacent FINAL waypoint wp[3] sits 30px from its label — a bug skipping terminals
+  // on the circle side would miss this.
+  const label = turnLabelPoint(new Point(0, 0));
+  const wps = [
+    mkWp(1, 4, 0, 400),
+    mkWp(2, 4, 0, 0),
+    mkWp(3, 4, 400, 0),
+    mkWp(4, 4, label.x + 30, label.y),
+  ];
+  assert.equal(wps[3].isTerminal, true);
+  assert.equal(turnLabelsClearOfNonAdjacentWaypoints(wps), false);
+});
+
+test("turnLabelsClearOfNonAdjacentWaypoints: 70px-apart circle (ADR-0007 ok) but ~24px from the label is rejected", () => {
+  // The reported defect: a non-adjacent waypoint can sit exactly 70px from the owner's CENTRE
+  // (satisfying ADR-0007) yet, lying along the NE label ray, end up only 70 - 46 = ~24px from the
+  // label — inside the 25px circle. This is precisely the case ADR-0008 closes.
+  const owner = new Point(0, 0);
+  const along = new Point(70 * Math.cos(Math.PI / 4), -70 * Math.sin(Math.PI / 4)); // 70px NE
+  const wps = [
+    mkWp(1, 4, 0, 400),
+    mkWp(2, 4, owner.x, owner.y), // owner (interior)
+    mkWp(3, 4, 400, 0), // adjacent filler, far
+    mkWp(4, 4, along.x, along.y), // protected (terminal), 70px from centre along the NE ray
+  ];
+  const centreGap = Math.hypot(along.x - owner.x, along.y - owner.y);
+  const labelGap = Math.hypot(
+    along.x - turnLabelPoint(owner).x,
+    along.y - turnLabelPoint(owner).y
+  );
+  assert.ok(Math.abs(centreGap - 70) < 1e-9, "the pair is 70px centre-to-centre");
+  assert.ok(labelGap < WAYPOINT_RADIUS, `~24px from the label, got ${labelGap.toFixed(2)}`);
+  assert.equal(nonAdjacentWaypointsKeepMinGap(wps), true, "passes the ADR-0007 70px circle gap");
+  assert.equal(turnLabelsClearOfNonAdjacentWaypoints(wps), false, "but fails the new label rule");
+});
+
+test("turnLabelsClearOfNonAdjacentWaypoints: empty / single / 2- and 3-waypoint walks pass (no non-adjacent label pairs)", () => {
+  assert.equal(turnLabelsClearOfNonAdjacentWaypoints([]), true);
+  assert.equal(turnLabelsClearOfNonAdjacentWaypoints([mkWp(1, 2, 0, 0)]), true);
+  assert.equal(
+    turnLabelsClearOfNonAdjacentWaypoints([mkWp(1, 2, 0, 0), mkWp(2, 2, 0, 10)]),
+    true
+  );
+  // In a 3-waypoint walk the lone interior owner's only neighbours are both adjacent, so even a
+  // label sitting on a circle is exempt — there is no non-adjacent pair to check.
+  assert.equal(
+    turnLabelsClearOfNonAdjacentWaypoints([mkWp(1, 3, 0, 30), mkWp(2, 3, 0, 0), mkWp(3, 3, 0, -30)]),
+    true
+  );
 });
 
 // ---- noCloseParallelSegments ----
@@ -471,6 +587,33 @@ test("checkLayout: turn-label-too-close-to-segment violation reported", () => {
   ];
   const v = checkLayout(wps, segs, bounds);
   assert.ok(v.some(x => x.rule === "turn-label-too-close-to-segment"));
+});
+
+test("checkLayout: turn-label-too-close-to-waypoint violation reported (isolated)", () => {
+  // An orthogonal walk where interior wp[2]'s NE label lands ~24.7px from the non-adjacent terminal
+  // wp[6]'s circle, while their centres stay 70.7px apart (ADR-0007 ok) and every other rule is
+  // clean — so this fixture isolates the new rule. wp[6] is ~24.7px from seg4 too, but the label-vs-
+  // SEGMENT rule needs only 8px clearance and so does NOT fire; only the new 43px label-vs-WAYPOINT
+  // rule catches it — exactly the gap ADR-0008 closes.
+  const bounds = new Bounds(-300, -400, 700, 800);
+  const wps = [
+    mkWp(1, 6, 0, 150), // start
+    mkWp(2, 6, 0, 0), // owner: NE label ≈ (32.53, -32.53)
+    mkWp(3, 6, -150, 0),
+    mkWp(4, 6, -150, -200),
+    mkWp(5, 6, 50, -200),
+    mkWp(6, 6, 50, -50), // protected terminal: 70.7px from wp2's centre, ~24.7px from its label
+  ];
+  const segs = [
+    mkSeg(0, 150, 0, 0),
+    mkSeg(0, 0, -150, 0),
+    mkSeg(-150, 0, -150, -200),
+    mkSeg(-150, -200, 50, -200),
+    mkSeg(50, -200, 50, -50),
+  ];
+  const v = checkLayout(wps, segs, bounds);
+  assert.ok(v.some(x => x.rule === "turn-label-too-close-to-waypoint"));
+  assert.equal(v.length, 1, "the fixture isolates the new label-vs-waypoint rule");
 });
 
 // ---- noCloseParallelSegments: co-linear edge cases ----

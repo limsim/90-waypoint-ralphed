@@ -12,7 +12,13 @@ import { Walk } from "../src/domain/walk.js";
 import { Turn } from "../src/domain/turn.js";
 import { Bounds } from "../src/domain/bounds.js";
 import { SeededRandom } from "../src/domain/seeded-random.js";
-import { WAYPOINT_RADIUS, MIN_WAYPOINT_GAP } from "../src/domain/layout-rules.js";
+import {
+  WAYPOINT_RADIUS,
+  MIN_WAYPOINT_GAP,
+  TURN_LABEL_RADIUS,
+  TURN_LABEL_CLEARANCE,
+  turnLabelPoint,
+} from "../src/domain/layout-rules.js";
 
 /** Drive the generator iterator to completion and return its final result. */
 function drive(
@@ -149,6 +155,38 @@ test("adjacent waypoints may sit below the 70px floor — the exemption is load-
     `expected the generator to place some adjacent waypoints below ${MIN}px (the exempt zone), ` +
       `proving the adjacent-pair exemption is exercised by real walks; found ${closeAdjacentPairs}`
   );
+});
+
+// ---- turn labels clear of non-adjacent waypoint circles (US-024 / ADR-0008) ----
+
+test("every interior turn label clears non-adjacent waypoint circles by >= 43px, across seeds and counts", () => {
+  // The generator's incremental conflict check mirrors the Walk invariant's label-vs-waypoint rule
+  // (ADR-0008), so generated walks satisfy it directly (and `expectWalk` already proves Walk.create
+  // accepted them — no invariant throw). This asserts the geometric guarantee itself across sizes
+  // and seeds. Adjacent waypoints (|i-j| <= 1) are exempt; terminals own no label but their circles
+  // are still protected.
+  const MIN = WAYPOINT_RADIUS + TURN_LABEL_RADIUS + TURN_LABEL_CLEARANCE; // 43
+  for (const count of [10, 25, 60, 90]) {
+    for (const seed of [1, 4242, 99]) {
+      const wps = expectWalk(drive(count, seed)).waypoints;
+      for (let i = 0; i < wps.length; i++) {
+        if (wps[i].isTerminal) continue;
+        const label = turnLabelPoint(wps[i].position);
+        for (let j = 0; j < wps.length; j++) {
+          if (Math.abs(j - i) <= 1) continue; // adjacent (and self) exempt
+          const d = Math.hypot(
+            wps[j].position.x - label.x,
+            wps[j].position.y - label.y
+          );
+          assert.ok(
+            d >= MIN - 1e-9,
+            `label of waypoint ${i + 1} is ${d.toFixed(2)}px from waypoint ${j + 1}'s circle ` +
+              `(< ${MIN}) for count=${count} seed=${seed}`
+          );
+        }
+      }
+    }
+  }
 });
 
 // ---- determinism ----

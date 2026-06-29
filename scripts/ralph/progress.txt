@@ -548,6 +548,30 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   passes) but flips high-bit seeds negative. verify:main now round-trips {0, 1, 2^31, 0xDEADBEEF,
   2^32-1} through productionWalkUrl AND asserts `createRandom(seed).seed === seed` (every uint32 is a
   `>>> 0` fixed point) — proven to bite on the signed-shift regression that the < 2^31 check is blind to.
+- ADJACENCY conventions in layout-rules are RULE-SPECIFIC — there are now THREE, do not assume one:
+  (1) circle-pair rules (overlap, nonAdjacentWaypointsKeepMinGap) iterate i<j and exempt `j-i===1`;
+  (2) segment-vs-waypoint rules exempt `wi===si || wi===si+1` (segments[si] joins waypoints[si],[si+1]);
+  (3) the US-024 label-vs-waypoint rule (`turnLabelsClearOfNonAdjacentWaypoints`) exempts `|i-j|<=1`
+  — BOTH neighbours of the label owner, because the label belongs to ONE waypoint and the protected
+  circle can be on EITHER side. The label owner must be INTERIOR (skip `isTerminal`), but the
+  PROTECTED circle may be terminal (do NOT skip terminals on the circle side — the start/end circles
+  are protected). In the generator mirror the lone exempt neighbour is `idx-1` (WAYPOINT adjacency),
+  which differs from the SEGMENT-adjacency reason that exempts segments[idx-1]/segments[idx] in the
+  label-vs-SEGMENT block — they sit adjacent in the same function; comment the distinction.
+- US-024 (ADR-0008) threshold = `WAYPOINT_RADIUS + TURN_LABEL_RADIUS + TURN_LABEL_CLEARANCE` (25+10+8
+  = 43px); the label is modelled as a disc of radius `TURN_LABEL_RADIUS=10` (≈ the bold-16px "W"
+  half-diagonal). The exemption is REQUIRED, not cosmetic: an adjacent N/E neighbour at the 60px min
+  segment is `hypot(46cos45, 60-46sin45) ≈ 42.58px` from the NE label — JUST below 43 — so without
+  `|i-j|<=1` the generator's legitimate near-floor placements would be rejected. The bug it closes:
+  ADR-0007's 70px CENTRE gap still lets a non-adjacent circle sit `70-46 = 24px` from the label (the
+  reported wp27-label-on-wp21-circle). ONE orthogonal 6-wp fixture (wp2 interior owner, wp6 terminal
+  at NE: centres 70.7px, label-to-circle 24.7px) isolates the new rule in BOTH the checkLayout test
+  (v.length===1) and the Walk.create throw test (parse-and-deepEqual the rule list, like US-023 rule
+  7); it ALSO shows the label-vs-SEGMENT rule (8px) does NOT fire at 24.7px while the new 43px rule
+  does — the exact gap ADR-0008 closes. Generator stays green at counts up to 90 (the tighter packing
+  is absorbed by the ADR-0002 growth/re-roll budget). Proof-of-bite: setting the generator's
+  `labelWaypointClearance` to 0 (keeping the invariant) made 23 tests fail (real walks now trip the
+  43px invariant), proving the mirror is load-bearing; reverted via a precise Edit + `npm run clean`.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -2602,4 +2626,51 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     → overlap + min-gap + segment-too-close + segment-through-circle all fire). Keep segments
     orthogonal when perturbing a fixture, or you trip the diagonal Segment-ctor guard FIRST (a
     different, less informative failure than the layout cascade you intended to demonstrate).
+---
+
+## 2026-06-29 - US-024 (Turn labels clear of non-adjacent waypoint circles) — AD-HOC REVIEW + IMPLEMENT
+- Ad-hoc run: "review and see if any improvements can be made to story US-024." Found US-024 was
+  UNIMPLEMENTED (passes:false, empty notes) — only ADR-0008 + the PRD story existed (commit ff9affa,
+  docs only). The src had none of the symbols. Reviewed the spec/ADR (sound; verified the 43px
+  threshold, the ~42.58px adjacent-floor case, and the 70px-centre→24px-label bug geometry by hand),
+  then implemented the story against it. Per the run instruction I did NOT edit prd.json (left
+  passes:false and notes empty — a human flips the flag after browser sign-off, see CAVEAT below).
+- What was implemented:
+  - src/domain/layout-rules.ts: added `TURN_LABEL_RADIUS = 10` (the bold-16px "W" glyph footprint
+    disc; ADR-0008) and the pure predicate `turnLabelsClearOfNonAdjacentWaypoints(waypoints)` —
+    every INTERIOR waypoint's `turnLabelPoint` must be >= WAYPOINT_RADIUS+TURN_LABEL_RADIUS+
+    TURN_LABEL_CLEARANCE (43px) from every NON-adjacent waypoint centre; `|i-j|<=1` exempt (both
+    neighbours); terminals skipped as OWNERS but PROTECTED as circles. checkLayout pushes
+    `{rule:"turn-label-too-close-to-waypoint"}` right after the label-vs-segment rule, so Walk.create
+    throws on it with zero change to walk.ts.
+  - src/domain/walk-generator.ts: newWaypointConflicts block (5) — bidirectional 43px mirror (new
+    interior label vs all prior non-adjacent circles incl. terminal j=0; prior interior labels vs the
+    new circle, runs even when the new wp is terminal). Lone exempt neighbour idx-1; imported
+    TURN_LABEL_RADIUS. Flows through canExtend lookahead automatically.
+  - Tests (+11, 265→276): tests/layout-rules.test.ts +8 (TURN_LABEL_RADIUS const + 43px arithmetic +
+    boundary 43-pass/42-fail + adjacent-N-at-60px-exempt(load-bearing) + wildcard-owner-checked +
+    terminal-circle-protected + reported-geometry regression(70px centre passes ADR-0007, 24px label
+    fails) + empty/1/2/3-wp + checkLayout isolation v.length===1). tests/walk.test.ts +1 (Walk.create
+    throw, sole violation parsed-and-deepEqual'd = ["turn-label-too-close-to-waypoint"], like US-023
+    rule 7). tests/walk-generator.test.ts +1 (every interior label clears non-adjacent circles >=43px
+    across counts 10/25/60/90 x seeds 1/4242/99).
+- VERIFIED: npm run clean + npm test → 276 pass (was 265; +11, no regressions); npm run typecheck
+  clean; verify:renderer / verify:controls (34) / verify:main (14) all green (the tighter packing
+  changes walk SHAPES but they stay valid up to count=90). PROOF-OF-BITE: temporarily set the
+  generator's `labelWaypointClearance` to 0 (keeping the invariant) → 23 tests failed (real generated
+  walks now trip the 43px label invariant), proving the generator mirror is load-bearing; reverted
+  via a precise Edit (NOT git checkout — uncommitted files) + npm run clean, re-confirmed 276 pass.
+- No renderer change: US-024 is a GENERATION-SPACE rule; the renderer already draws labels via the
+  shared `turnLabelPoint`. TURN_LABEL_RADIUS is a spacing-model approximation, not a render dimension.
+- **Learnings for future iterations:** (consolidated into Codebase Patterns above)
+  - THREE distinct adjacency conventions now live in layout-rules; the label-vs-waypoint rule uses
+    `|i-j|<=1` (both neighbours), unlike the circle rule's `j-i===1` and the segment rules'
+    `wi===si||wi===si+1`. The generator's exempt neighbour idx-1 is WAYPOINT adjacency, distinct from
+    the SEGMENT-adjacency reason in the adjacent label-vs-segment block — comment the distinction.
+  - One carefully-built orthogonal fixture can isolate a rule at BOTH the checkLayout level
+    (v.length===1) and the Walk.create-throw level (parse the "Invalid Walk layout: <rule>, ..."
+    message and deepEqual the list) — and double as the spec's reported-geometry regression.
+  - CAVEAT (carried from US-013..023): no browser/Playwright MCP in this env, so a LIVE visual
+    confirmation (a label no longer sits on a non-adjacent circle) is pending; the domain tests +
+    headless gates stand in. passes:false intentionally left for a human to flip after sign-off.
 ---
