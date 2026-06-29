@@ -189,6 +189,43 @@ test("every interior turn label clears non-adjacent waypoint circles by >= 43px,
   }
 });
 
+test("the label rule's adjacency exemption is load-bearing: generation places SOME adjacent label/circle pair below the 43px floor", () => {
+  // Counterpart to the non-adjacent-clearance test above, and the direct analogue of US-023's
+  // adjacent-circle-gap exemption test. The `|i-j| <= 1` exemption (ADR-0008) is REQUIRED, not
+  // cosmetic: an adjacent N/E neighbour reached by the 60px min segment sits ~42.58px from the NE
+  // label — just inside the 43px floor. Without a test that the exempt zone is actually EXERCISED in
+  // real output, a regression that TIGHTENS the floor onto adjacent pairs too would be a pure
+  // over-constraint — generation still succeeds (slightly tighter, absorbed by the re-roll budget),
+  // Walk.create still accepts (the invariant exempts adjacent pairs), and the `>= 43px` non-adjacent
+  // assertion above still passes — so the silent rot the Codebase Patterns note flags would slip
+  // through. Counting adjacent pairs below the floor proves the generator legitimately produces them,
+  // which is exactly why the invariant must (and does) exempt them.
+  const FLOOR = WAYPOINT_RADIUS + TURN_LABEL_RADIUS + TURN_LABEL_CLEARANCE; // 43
+  let adjacentBelowFloor = 0;
+  for (const count of [40, 60, 90]) {
+    for (let seed = 1; seed <= 12; seed++) {
+      const wps = expectWalk(drive(count, seed)).waypoints;
+      for (let i = 0; i < wps.length; i++) {
+        if (wps[i].isTerminal) continue; // only interior waypoints own a label
+        const label = turnLabelPoint(wps[i].position);
+        for (let j = 0; j < wps.length; j++) {
+          if (Math.abs(i - j) !== 1) continue; // ADJACENT pairs only — the exempt zone
+          const d = Math.hypot(wps[j].position.x - label.x, wps[j].position.y - label.y);
+          if (d < FLOOR) adjacentBelowFloor++;
+        }
+      }
+    }
+  }
+  // 26 such pairs were observed across this matrix. Assert a comfortable lower bound: any value > 0
+  // proves the exempt zone is exercised (tightening the floor onto adjacent pairs drops the count to
+  // 0 and fails this), while the margin keeps benign stream drift from making it flaky.
+  assert.ok(
+    adjacentBelowFloor >= 8,
+    `expected several adjacent label/circle pairs below the ${FLOOR}px floor (the exempt zone), ` +
+      `got ${adjacentBelowFloor}`
+  );
+});
+
 // ---- determinism ----
 
 test("a fixed seed reproduces an identical Walk", () => {

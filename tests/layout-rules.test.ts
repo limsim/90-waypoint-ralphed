@@ -208,6 +208,18 @@ test("turnLabelsClearOfNonAdjacentWaypoints: an adjacent N neighbour at the 60px
   assert.equal(turnLabelsClearOfNonAdjacentWaypoints(wps), true);
 });
 
+test("turnLabelsClearOfNonAdjacentWaypoints: an adjacent E neighbour at the 60px min segment is exempt (load-bearing)", () => {
+  // The mirror of the N case across the NE (45°) label ray, the other closest direction the AC and
+  // ADR-0008 enumerate. Owner = interior wp[1] at (0,0); its adjacent successor wp[2] sits due East
+  // at 60px — by symmetry also ~42.58px from the NE label, just inside the 43px floor. Adjacent
+  // (|1-2|=1), so exempt; the generator legitimately produces this shape (an E-heading 60px segment).
+  const label = turnLabelPoint(new Point(0, 0));
+  const wps = [mkWp(1, 3, -60, 0), mkWp(2, 3, 0, 0), mkWp(3, 3, 60, 0)];
+  const d = Math.hypot(wps[2].position.x - label.x, wps[2].position.y - label.y);
+  assert.ok(d > 42 && d < 43, `expected ~42.58px, got ${d.toFixed(2)}`);
+  assert.equal(turnLabelsClearOfNonAdjacentWaypoints(wps), true);
+});
+
 test("turnLabelsClearOfNonAdjacentWaypoints: a wildcard (W) interior label owner is still checked", () => {
   // A wildcard owns a 'W' label, so it must be checked like any interior owner (a bug that skipped
   // null-turn waypoints would miss it). wp[1] is a wildcard; wp[3] sits 30px from its label.

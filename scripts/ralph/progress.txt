@@ -572,6 +572,22 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   is absorbed by the ADR-0002 growth/re-roll budget). Proof-of-bite: setting the generator's
   `labelWaypointClearance` to 0 (keeping the invariant) made 23 tests fail (real walks now trip the
   43px invariant), proving the mirror is load-bearing; reverted via a precise Edit + `npm run clean`.
+  REFINEMENT (test only, no impl change): US-024's `|i-j|<=1` adjacency EXEMPTION had the same blind
+  spot the US-023 note above warns of — every test proved the predicate EXEMPTS adjacent pairs (fixtures)
+  but NONE proved the exempt zone is EXERCISED in real generator output, so TIGHTENING the 43px floor
+  onto adjacent pairs (in BOTH the invariant and the generator mirror) would be a pure over-constraint:
+  generation still succeeds, no Walk.create throw, and the `>=43px` non-adjacent generator assertion
+  still passes. Added a generator test counting ADJACENT (|i-j|===1) label/circle pairs below 43px across
+  counts [40,60,90] × seeds 1..12 and asserting `>= 8` (26 observed). GOTCHA: the EXISTING matrix
+  ([10,25,60,90]×[1,4242,99]) catches only ONE such pair (count=60/seed=1, exactly 42.58px) — too thin
+  for a stable guard; the label exempt-zone is NARROW (needs an N/E-adjacent ~60px segment, ~1/81 per
+  segment) so it fires reliably only at LARGE counts (count=90: 24/40 seeds) — pick the matrix by MEASURING
+  the aggregate first. PROVEN TO BITE: extending block-(5) loops from `idx-2` to `idx-1` (enforcing 43px on
+  the adjacent predecessor) leaves generate(10/25/60/90) terminating + the non-adjacent test green but
+  drops the new test's count to fail it; reverted (the file was COMMITTED so `git checkout` was safe, but
+  used a precise Edit + `npm run clean` per the uncommitted-file gotcha). Also added the East-neighbour
+  mirror of the layout-rules adjacent-exemption boundary fixture (AC enumerates "N/E"; only N was tested —
+  E is the symmetric ~42.58px case). 278 tests (was 276; +2). typecheck + verify:renderer/controls(34)/main(14) green.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -2673,4 +2689,31 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   - CAVEAT (carried from US-013..023): no browser/Playwright MCP in this env, so a LIVE visual
     confirmation (a label no longer sits on a non-adjacent circle) is pending; the domain tests +
     headless gates stand in. passes:false intentionally left for a human to flip after sign-off.
+---
+
+## 2026-06-29 09:36 BST - US-024 (review/refinement pass)
+- Ad-hoc task: review US-024 (turn labels clear of non-adjacent waypoint circles) for improvements.
+  The implementation (layout-rules predicate + checkLayout + generator mirror + ADR-0008) was already
+  complete and correct against every AC; the gap was in TEST COVERAGE of the adjacency exemption.
+- What was improved (tests only — no production-code change):
+  - tests/walk-generator.test.ts: added a test proving the label rule's `|i-j|<=1` adjacency EXEMPTION
+    is load-bearing — counts [40,60,90] × seeds 1..12, counting ADJACENT label/circle pairs below the
+    43px floor and asserting `>= 8` (26 observed). Closes the same "unexercised exemption rots silently"
+    gap the US-023 Codebase-Patterns note flags: tightening the floor onto adjacent pairs is a pure
+    over-constraint that every prior assertion passed through. PROVEN TO BITE (see pattern note).
+  - tests/layout-rules.test.ts: added the East-neighbour mirror of the adjacent-exemption boundary
+    fixture (the AC enumerates an "N/E neighbour at the 60px min segment"; only N was previously tested;
+    E is the symmetric ~42.58px case across the NE label ray).
+- Files changed: tests/walk-generator.test.ts, tests/layout-rules.test.ts, scripts/ralph/progress.txt.
+- Quality gate: npm run clean && npm test = 278 pass (was 276); npm run typecheck clean;
+  verify:renderer / verify:controls (34) / verify:main (14) all green.
+- Did NOT touch scripts/ralph/prd.json story flags (ad-hoc run, per instructions).
+- **Learnings for future iterations:**
+  - An exemption clause's exempt-zone test must be sized to a matrix that actually EXERCISES it: US-024's
+    label exempt zone is far narrower than US-023's circle one (needs an N/E-adjacent ~60px segment), so
+    the standard [10,25,60,90]×[1,4242,99] matrix caught only 1 pair. MEASURE the aggregate first, then
+    pick counts/seeds (large counts fire it most) and assert a margin-comfortable lower bound.
+  - When the story under refinement is already COMMITTED, the working tree is clean, so a proof-of-bite
+    temp edit can be reverted with `git checkout <file>` — but a precise reverse Edit + `npm run clean`
+    is still the safer habit (and the only safe option when the story's changes are uncommitted).
 ---
