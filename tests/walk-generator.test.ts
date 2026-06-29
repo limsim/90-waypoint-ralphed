@@ -12,6 +12,13 @@ import { Walk } from "../src/domain/walk.js";
 import { Turn } from "../src/domain/turn.js";
 import { Bounds } from "../src/domain/bounds.js";
 import { SeededRandom } from "../src/domain/seeded-random.js";
+import {
+  WAYPOINT_RADIUS,
+  MIN_WAYPOINT_GAP,
+  TURN_LABEL_RADIUS,
+  TURN_LABEL_CLEARANCE,
+  turnLabelPoint,
+} from "../src/domain/layout-rules.js";
 
 /** Drive the generator iterator to completion and return its final result. */
 function drive(
@@ -89,6 +96,134 @@ test("produced walks are valid across many seeds (no Walk.create violation)", ()
     const walk = expectWalk(drive(90, seed));
     assert.equal(walk.waypointCount, 90);
   }
+});
+
+// ---- non-adjacent minimum gap (US-023 / ADR-0007) ----
+
+test("every non-adjacent waypoint pair keeps the 70px min gap, across seeds and counts", () => {
+  // The generator's incremental conflict check enforces the same min-gap the Walk invariant does,
+  // so generated walks satisfy it directly (and `expectWalk` already proves Walk.create accepted
+  // them — i.e. no invariant throw). This asserts the geometric guarantee itself across a spread of
+  // sizes (10/25/60/90) and seeds. Adjacent pairs (index gap 1) are exempt and not checked.
+  const MIN = 2 * WAYPOINT_RADIUS + MIN_WAYPOINT_GAP; // 70
+  for (const count of [10, 25, 60, 90]) {
+    for (const seed of [1, 4242, 99]) {
+      const wps = expectWalk(drive(count, seed)).waypoints;
+      for (let i = 0; i < wps.length; i++) {
+        for (let j = i + 2; j < wps.length; j++) {
+          const d = Math.hypot(
+            wps[j].position.x - wps[i].position.x,
+            wps[j].position.y - wps[i].position.y
+          );
+          assert.ok(
+            d >= MIN - 1e-9,
+            `non-adjacent waypoints ${i + 1} & ${j + 1} are ${d.toFixed(2)}px apart (< ${MIN}) ` +
+              `for count=${count} seed=${seed}`
+          );
+        }
+      }
+    }
+  }
+});
+
+test("adjacent waypoints may sit below the 70px floor — the exemption is load-bearing", () => {
+  // The 70px min-gap applies ONLY to non-adjacent pairs (ADR-0007); adjacent (consecutive)
+  // waypoints are joined by a 60-140px segment and are EXEMPT. This proves the exemption is
+  // exercised end-to-end by real generation, not just on the hand-built fixtures in
+  // layout-rules.test.ts: across the same matrix the generator legitimately places some adjacent
+  // pairs in the exempt zone (< 70px, down to the 60px segment floor). Because `expectWalk` proves
+  // Walk.create ACCEPTED each walk, the invariant exempts those close adjacent pairs too — a 70px
+  // floor wrongly applied to adjacent pairs would force generation away from short segments (min
+  // adjacent distance 60 -> 70, count below 70 -> 0), which this assertion catches and which the
+  // non-adjacent test above (it only checks j >= i+2) is blind to.
+  const MIN = 2 * WAYPOINT_RADIUS + MIN_WAYPOINT_GAP; // 70
+  let closeAdjacentPairs = 0;
+  for (const count of [10, 25, 60, 90]) {
+    for (const seed of [1, 4242, 99]) {
+      const wps = expectWalk(drive(count, seed)).waypoints;
+      for (let i = 0; i + 1 < wps.length; i++) {
+        const d = Math.hypot(
+          wps[i + 1].position.x - wps[i].position.x,
+          wps[i + 1].position.y - wps[i].position.y
+        );
+        if (d < MIN) closeAdjacentPairs++;
+      }
+    }
+  }
+  assert.ok(
+    closeAdjacentPairs > 0,
+    `expected the generator to place some adjacent waypoints below ${MIN}px (the exempt zone), ` +
+      `proving the adjacent-pair exemption is exercised by real walks; found ${closeAdjacentPairs}`
+  );
+});
+
+// ---- turn labels clear of non-adjacent waypoint circles (US-024 / ADR-0008) ----
+
+test("every interior turn label clears non-adjacent waypoint circles by >= 43px, across seeds and counts", () => {
+  // The generator's incremental conflict check mirrors the Walk invariant's label-vs-waypoint rule
+  // (ADR-0008), so generated walks satisfy it directly (and `expectWalk` already proves Walk.create
+  // accepted them — no invariant throw). This asserts the geometric guarantee itself across sizes
+  // and seeds. Adjacent waypoints (|i-j| <= 1) are exempt; terminals own no label but their circles
+  // are still protected.
+  const MIN = WAYPOINT_RADIUS + TURN_LABEL_RADIUS + TURN_LABEL_CLEARANCE; // 43
+  for (const count of [10, 25, 60, 90]) {
+    for (const seed of [1, 4242, 99]) {
+      const wps = expectWalk(drive(count, seed)).waypoints;
+      for (let i = 0; i < wps.length; i++) {
+        if (wps[i].isTerminal) continue;
+        const label = turnLabelPoint(wps[i].position);
+        for (let j = 0; j < wps.length; j++) {
+          if (Math.abs(j - i) <= 1) continue; // adjacent (and self) exempt
+          const d = Math.hypot(
+            wps[j].position.x - label.x,
+            wps[j].position.y - label.y
+          );
+          assert.ok(
+            d >= MIN - 1e-9,
+            `label of waypoint ${i + 1} is ${d.toFixed(2)}px from waypoint ${j + 1}'s circle ` +
+              `(< ${MIN}) for count=${count} seed=${seed}`
+          );
+        }
+      }
+    }
+  }
+});
+
+test("the label rule's adjacency exemption is load-bearing: generation places SOME adjacent label/circle pair below the 43px floor", () => {
+  // Counterpart to the non-adjacent-clearance test above, and the direct analogue of US-023's
+  // adjacent-circle-gap exemption test. The `|i-j| <= 1` exemption (ADR-0008) is REQUIRED, not
+  // cosmetic: an adjacent N/E neighbour reached by the 60px min segment sits ~42.58px from the NE
+  // label — just inside the 43px floor. Without a test that the exempt zone is actually EXERCISED in
+  // real output, a regression that TIGHTENS the floor onto adjacent pairs too would be a pure
+  // over-constraint — generation still succeeds (slightly tighter, absorbed by the re-roll budget),
+  // Walk.create still accepts (the invariant exempts adjacent pairs), and the `>= 43px` non-adjacent
+  // assertion above still passes — so the silent rot the Codebase Patterns note flags would slip
+  // through. Counting adjacent pairs below the floor proves the generator legitimately produces them,
+  // which is exactly why the invariant must (and does) exempt them.
+  const FLOOR = WAYPOINT_RADIUS + TURN_LABEL_RADIUS + TURN_LABEL_CLEARANCE; // 43
+  let adjacentBelowFloor = 0;
+  for (const count of [40, 60, 90]) {
+    for (let seed = 1; seed <= 12; seed++) {
+      const wps = expectWalk(drive(count, seed)).waypoints;
+      for (let i = 0; i < wps.length; i++) {
+        if (wps[i].isTerminal) continue; // only interior waypoints own a label
+        const label = turnLabelPoint(wps[i].position);
+        for (let j = 0; j < wps.length; j++) {
+          if (Math.abs(i - j) !== 1) continue; // ADJACENT pairs only — the exempt zone
+          const d = Math.hypot(wps[j].position.x - label.x, wps[j].position.y - label.y);
+          if (d < FLOOR) adjacentBelowFloor++;
+        }
+      }
+    }
+  }
+  // 26 such pairs were observed across this matrix. Assert a comfortable lower bound: any value > 0
+  // proves the exempt zone is exercised (tightening the floor onto adjacent pairs drops the count to
+  // 0 and fails this), while the margin keeps benign stream drift from making it flaky.
+  assert.ok(
+    adjacentBelowFloor >= 8,
+    `expected several adjacent label/circle pairs below the ${FLOOR}px floor (the exempt zone), ` +
+      `got ${adjacentBelowFloor}`
+  );
 });
 
 // ---- determinism ----

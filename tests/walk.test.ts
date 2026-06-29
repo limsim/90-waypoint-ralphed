@@ -179,6 +179,63 @@ test("Walk.create: a turn label too close to a non-adjacent segment throws (rule
   assert.throws(() => Walk.create(wps, ROOM), /turn-label-too-close-to-segment/);
 });
 
+test("Walk.create: non-adjacent waypoints closer than 70px throw (rule 7, ADR-0007)", () => {
+  // A U-shape whose far end (WP5) folds back to ~62.5px from WP1 — a non-adjacent pair below the
+  // 70px min gap (but >= 50px, so the circles do not overlap). Every segment stays clear of
+  // non-adjacent waypoints, so only the new min-gap rule fires.
+  const wps = walkFrom([
+    [100, 400],
+    [100, 100],
+    [400, 100],
+    [400, 360],
+    [148, 360],
+  ]);
+  // Assert the SOLE violation — not just that the rule name is a substring of the message.
+  // `assert.throws(fn, /rule/)` only proves the rule is AMONG the violations; if this fixture ever
+  // started tripping a second rule (a geometry/threshold drift) the regex would still pass and the
+  // "only the new min-gap rule fires" claim above would rot silently. Parsing the rule list and
+  // asserting it is exactly [non-adjacent-waypoints-too-close] makes that isolation load-bearing,
+  // mirroring the checkLayout-level isolation test in tests/layout-rules.test.ts.
+  assert.throws(
+    () => Walk.create(wps, ROOM),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      const prefix = "Invalid Walk layout: ";
+      assert.ok(err.message.startsWith(prefix), `unexpected error: ${err.message}`);
+      const rules = err.message.slice(prefix.length).split(", ");
+      assert.deepEqual(rules, ["non-adjacent-waypoints-too-close"]);
+      return true;
+    }
+  );
+});
+
+test("Walk.create: a turn label too close to a non-adjacent waypoint circle throws (rule 8, ADR-0008)", () => {
+  // Interior WP2's NE label lands ~24.7px from the non-adjacent terminal WP6's circle, while their
+  // centres stay 70.7px apart (passing the ADR-0007 circle gap). The label-vs-SEGMENT rule needs
+  // only 8px and so does not fire; only the new 43px label-vs-waypoint rule catches it — exactly the
+  // gap ADR-0008 closes. Asserting the SOLE violation makes the isolation load-bearing (see rule 7).
+  const region = new Bounds(-300, -400, 700, 800);
+  const wps = walkFrom([
+    [0, 150],
+    [0, 0], // WP2: owner of the offending NE label
+    [-150, 0],
+    [-150, -200],
+    [50, -200],
+    [50, -50], // WP6: protected circle — 70.7px from WP2 centre, ~24.7px from its label
+  ]);
+  assert.throws(
+    () => Walk.create(wps, region),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      const prefix = "Invalid Walk layout: ";
+      assert.ok(err.message.startsWith(prefix), `unexpected error: ${err.message}`);
+      const rules = err.message.slice(prefix.length).split(", ");
+      assert.deepEqual(rules, ["turn-label-too-close-to-waypoint"]);
+      return true;
+    }
+  );
+});
+
 test("Walk.create: a waypoint outside the bounds (30px padding) throws (rule 6)", () => {
   // The good geometry, but a region too tight for the 30px padding.
   const tight = new Bounds(90, 290, 210, 410); // padding 30 -> usable x[120,180] y[320,380]

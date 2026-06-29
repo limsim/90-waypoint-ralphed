@@ -9,9 +9,11 @@ import { RandomSource } from "./random-source.js";
 import {
   turnLabelPoint,
   WAYPOINT_RADIUS,
+  MIN_WAYPOINT_GAP,
   MIN_PARALLEL_SEPARATION,
   MIN_SEGMENT_WAYPOINT_CLEARANCE,
   TURN_LABEL_CLEARANCE,
+  TURN_LABEL_RADIUS,
   BOUNDS_PADDING,
 } from "./layout-rules.js";
 
@@ -160,10 +162,16 @@ function newWaypointConflicts(
   const newSeg = segments[idx - 1];
   const newIsInterior = idx !== 0 && idx !== total - 1;
 
-  // (1) no two waypoint circles overlap: new waypoint vs every prior waypoint
+  // (1) waypoint-circle spacing vs every prior waypoint. The one adjacent predecessor (idx-1,
+  //     joined to the new waypoint by `newSeg`) keeps only the 50px hard-overlap floor; every
+  //     NON-adjacent prior waypoint keeps the larger 70px min-gap floor so unrelated parts of the
+  //     walk never appear to touch (ADR-0007). Mirrors layout-rules' noWaypointCirclesOverlap +
+  //     nonAdjacentWaypointsKeepMinGap.
   for (let j = 0; j < idx; j++) {
     const q = positions[j];
-    if (Math.hypot(p.x - q.x, p.y - q.y) < 2 * WAYPOINT_RADIUS) return true;
+    const minSeparation =
+      j === idx - 1 ? 2 * WAYPOINT_RADIUS : 2 * WAYPOINT_RADIUS + MIN_WAYPOINT_GAP;
+    if (Math.hypot(p.x - q.x, p.y - q.y) < minSeparation) return true;
   }
 
   // (2) no close parallel segments: new segment vs every prior segment
@@ -197,6 +205,30 @@ function newWaypointConflicts(
   for (let j = 1; j <= idx - 2; j++) {
     const label = turnLabelPoint(positions[j]);
     if (newSeg.distanceFrom(label) < TURN_LABEL_CLEARANCE) return true;
+  }
+
+  // (5) turn labels clear of NON-ADJACENT waypoint CIRCLES (>= 43px, ADR-0008). The label disc
+  //   (TURN_LABEL_RADIUS) must keep TURN_LABEL_CLEARANCE clear of the 25px circle. The single exempt
+  //   neighbour is idx-1 by WAYPOINT adjacency (consecutive waypoints joined by a segment) — note
+  //   this differs from the SEGMENT-adjacency reason that exempts segments[idx-1]/segments[idx] in
+  //   (4) above. Mirrors layout-rules' turnLabelsClearOfNonAdjacentWaypoints in both directions.
+  const labelWaypointClearance = WAYPOINT_RADIUS + TURN_LABEL_RADIUS + TURN_LABEL_CLEARANCE;
+  //   (a) the new (interior) waypoint's label vs every prior NON-adjacent circle (0..idx-2; the
+  //       terminal start j=0 is protected too — terminals are not skipped on the circle side).
+  if (newIsInterior) {
+    const label = turnLabelPoint(p);
+    for (let j = 0; j <= idx - 2; j++) {
+      if (Math.hypot(positions[j].x - label.x, positions[j].y - label.y) < labelWaypointClearance) {
+        return true;
+      }
+    }
+  }
+  //   (b) every prior INTERIOR waypoint's label (1..idx-2) vs the new waypoint's circle. Runs even
+  //       when the new waypoint is terminal (its circle is still protected); idx-1 is adjacent and
+  //       excluded by the loop bound.
+  for (let j = 1; j <= idx - 2; j++) {
+    const label = turnLabelPoint(positions[j]);
+    if (Math.hypot(p.x - label.x, p.y - label.y) < labelWaypointClearance) return true;
   }
 
   return false;

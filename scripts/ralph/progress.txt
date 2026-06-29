@@ -25,7 +25,37 @@ Started: Sat 27 Jun 2026 18:13:25 BST
 - Expanding `RandomSource` interface: search for `{ nextFloat:` stubs across tests/ whenever adding a new method — each stub must implement the full interface or tsc fails.
 - layout-rules adjacency model: `segments[i]` (0-indexed) is adjacent to `waypoints[i]` and
   `waypoints[i+1]`. Everything else is "non-adjacent". US-008 (Walk) and US-010 (generator) must use
-  this same index convention when calling the layout-rule predicates.
+  this same index convention when calling the layout-rule predicates. For WAYPOINT-pair adjacency
+  (US-023's `nonAdjacentWaypointsKeepMinGap`), waypoints are in sequence order so array-index
+  neighbours `j-i===1` are exactly the adjacent (sequence-gap-1) pairs — exempt; `j-i>1` is checked.
+- Adding a new layout constraint (US-023 pattern): (1) add the constant + a pure predicate to
+  `layout-rules.ts`, (2) push its `{rule:"..."}` in `checkLayout` — `Walk.create` composes
+  checkLayout so it throws on the new rule with NO change to walk.ts, (3) mirror it in the generator's
+  `newWaypointConflicts` (the incremental hot-loop check) so generation keeps producing walks the
+  invariant accepts (this flows through `canExtend` lookahead automatically), (4) PROVE the generator
+  mirror is load-bearing by temporarily reverting just that check (keep the invariant) and watching
+  `Walk.create` throw across the generator/use-case/clear tests (US-023: 31 failures), then revert via
+  a precise Edit + `npm run clean`. `assert.throws(fn, /rule-name/)` matches a SUBSTRING of the joined
+  violation message, so a fixture that ALSO trips the new rule does NOT break existing per-rule throw
+  tests — but isolate the new rule's own fixture (assert `v.length===1` / overlap NOT also tripped).
+  This cuts BOTH ways: a per-rule `Walk.create` throw test whose fixture is MEANT to isolate one rule
+  but only `/rule/`-matches the message rots silently if the fixture later drifts into tripping a 2nd
+  rule (the name is still a substring → still green). To make an aggregate-level isolation claim
+  load-bearing, parse the rule list off the message (Walk.create throws `Invalid Walk layout: <rule>,
+  <rule>, ...`) and `deepEqual` it to the single expected rule — NOT a regex. Proven to bite by nudging
+  US-023's rule-7 U-shape to (120,360): still orthogonal, 44.7px from WP1, trips 4 rules; the regex
+  passes, the deepEqual fails. (The checkLayout-level test already did `!v.some(overlap)`; this mirrors
+  that at the Walk aggregate.)
+  US-023 folded the non-adjacent 70px floor into the existing 50px circle loop: adjacent predecessor
+  (`j===idx-1`) keeps 50px, non-adjacent priors get `2*WAYPOINT_RADIUS+MIN_WAYPOINT_GAP` (70px).
+- An EXEMPTION clause (US-023's "adjacent pairs are exempt", a falsy sentinel, an aspect-`min` binding
+  term) needs a test that the exempt case ACTUALLY OCCURS in real output, not just a fixture proving
+  the predicate exempts it. A regression that TIGHTENS the rule onto the exempt case is a pure
+  over-constraint: output stays valid, no crash, every "is-valid / meets-the-floor" assertion still
+  passes — only an assertion that the exempt zone is EXERCISED catches it (US-023: assert generated
+  walks place SOME adjacent pair <70px; reverting the generator exemption pushes min-adjacent 60->70
+  and the <70 count 46->0/543, failing it while all prior tests stayed green). Same rot lesson as the
+  `?seed=0` falsy sentinel and the aspect-`min(...)` per-binding-term fixtures.
 - `Walk.create(waypoints, bounds)` (src/domain/walk.ts) DERIVES segments from consecutive waypoints
   (`new Segment(wps[i].position, wps[i+1].position)`) — callers (US-010 generator) pass ONLY the placed
   waypoints + the generation region, never a separate segments array. This makes the layout-rules
@@ -518,6 +548,46 @@ Started: Sat 27 Jun 2026 18:13:25 BST
   passes) but flips high-bit seeds negative. verify:main now round-trips {0, 1, 2^31, 0xDEADBEEF,
   2^32-1} through productionWalkUrl AND asserts `createRandom(seed).seed === seed` (every uint32 is a
   `>>> 0` fixed point) — proven to bite on the signed-shift regression that the < 2^31 check is blind to.
+- ADJACENCY conventions in layout-rules are RULE-SPECIFIC — there are now THREE, do not assume one:
+  (1) circle-pair rules (overlap, nonAdjacentWaypointsKeepMinGap) iterate i<j and exempt `j-i===1`;
+  (2) segment-vs-waypoint rules exempt `wi===si || wi===si+1` (segments[si] joins waypoints[si],[si+1]);
+  (3) the US-024 label-vs-waypoint rule (`turnLabelsClearOfNonAdjacentWaypoints`) exempts `|i-j|<=1`
+  — BOTH neighbours of the label owner, because the label belongs to ONE waypoint and the protected
+  circle can be on EITHER side. The label owner must be INTERIOR (skip `isTerminal`), but the
+  PROTECTED circle may be terminal (do NOT skip terminals on the circle side — the start/end circles
+  are protected). In the generator mirror the lone exempt neighbour is `idx-1` (WAYPOINT adjacency),
+  which differs from the SEGMENT-adjacency reason that exempts segments[idx-1]/segments[idx] in the
+  label-vs-SEGMENT block — they sit adjacent in the same function; comment the distinction.
+- US-024 (ADR-0008) threshold = `WAYPOINT_RADIUS + TURN_LABEL_RADIUS + TURN_LABEL_CLEARANCE` (25+10+8
+  = 43px); the label is modelled as a disc of radius `TURN_LABEL_RADIUS=10` (≈ the bold-16px "W"
+  half-diagonal). The exemption is REQUIRED, not cosmetic: an adjacent N/E neighbour at the 60px min
+  segment is `hypot(46cos45, 60-46sin45) ≈ 42.58px` from the NE label — JUST below 43 — so without
+  `|i-j|<=1` the generator's legitimate near-floor placements would be rejected. The bug it closes:
+  ADR-0007's 70px CENTRE gap still lets a non-adjacent circle sit `70-46 = 24px` from the label (the
+  reported wp27-label-on-wp21-circle). ONE orthogonal 6-wp fixture (wp2 interior owner, wp6 terminal
+  at NE: centres 70.7px, label-to-circle 24.7px) isolates the new rule in BOTH the checkLayout test
+  (v.length===1) and the Walk.create throw test (parse-and-deepEqual the rule list, like US-023 rule
+  7); it ALSO shows the label-vs-SEGMENT rule (8px) does NOT fire at 24.7px while the new 43px rule
+  does — the exact gap ADR-0008 closes. Generator stays green at counts up to 90 (the tighter packing
+  is absorbed by the ADR-0002 growth/re-roll budget). Proof-of-bite: setting the generator's
+  `labelWaypointClearance` to 0 (keeping the invariant) made 23 tests fail (real walks now trip the
+  43px invariant), proving the mirror is load-bearing; reverted via a precise Edit + `npm run clean`.
+  REFINEMENT (test only, no impl change): US-024's `|i-j|<=1` adjacency EXEMPTION had the same blind
+  spot the US-023 note above warns of — every test proved the predicate EXEMPTS adjacent pairs (fixtures)
+  but NONE proved the exempt zone is EXERCISED in real generator output, so TIGHTENING the 43px floor
+  onto adjacent pairs (in BOTH the invariant and the generator mirror) would be a pure over-constraint:
+  generation still succeeds, no Walk.create throw, and the `>=43px` non-adjacent generator assertion
+  still passes. Added a generator test counting ADJACENT (|i-j|===1) label/circle pairs below 43px across
+  counts [40,60,90] × seeds 1..12 and asserting `>= 8` (26 observed). GOTCHA: the EXISTING matrix
+  ([10,25,60,90]×[1,4242,99]) catches only ONE such pair (count=60/seed=1, exactly 42.58px) — too thin
+  for a stable guard; the label exempt-zone is NARROW (needs an N/E-adjacent ~60px segment, ~1/81 per
+  segment) so it fires reliably only at LARGE counts (count=90: 24/40 seeds) — pick the matrix by MEASURING
+  the aggregate first. PROVEN TO BITE: extending block-(5) loops from `idx-2` to `idx-1` (enforcing 43px on
+  the adjacent predecessor) leaves generate(10/25/60/90) terminating + the non-adjacent test green but
+  drops the new test's count to fail it; reverted (the file was COMMITTED so `git checkout` was safe, but
+  used a precise Edit + `npm run clean` per the uncommitted-file gotcha). Also added the East-neighbour
+  mirror of the layout-rules adjacent-exemption boundary fixture (AC enumerates "N/E"; only N was tested —
+  E is the symmetric ~42.58px case). 278 tests (was 276; +2). typecheck + verify:renderer/controls(34)/main(14) green.
 
 ## 2026-06-27 18:21 BST - US-001 (Scaffold the project)
 - Recreated the scaffold removed by the reset commit and verified the toolchain end to end.
@@ -2458,4 +2528,232 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     (two loads of the same `?seed=` URL look identical; the URL updating after a fresh Generate) remains
     the only outstanding item (AC8) — the headless harnesses + AC5 determinism node:test stand in for
     the functional ACs.
+---
+
+## 2026-06-28 - US-023 (Minimum gap between non-adjacent waypoints)
+- Implemented the non-adjacent waypoint min-gap (ADR-0007): non-adjacent (sequence gap > 1) waypoint
+  circles must keep MIN_WAYPOINT_GAP=20px of clear space between their edges (centres >= 70px =
+  2*WAYPOINT_RADIUS + MIN_WAYPOINT_GAP); adjacent (consecutive) waypoints stay exempt. Fixes the
+  reported #49/#54 tangent (touching) circles that read as a collision. The old 50px hard-overlap
+  floor is untouched and still applies to every pair.
+- Files changed:
+  - src/domain/layout-rules.ts: added `MIN_WAYPOINT_GAP = 20`; new pure predicate
+    `nonAdjacentWaypointsKeepMinGap(waypoints)`; wired `{rule:"non-adjacent-waypoints-too-close"}`
+    into `checkLayout` (right after waypoint-circles-overlap).
+  - src/domain/walk-generator.ts: imported MIN_WAYPOINT_GAP; folded the 70px non-adjacent floor into
+    `newWaypointConflicts` rule (1) — adjacent predecessor `j===idx-1` keeps 50px, non-adjacent
+    priors get 70px. Flows through `canExtend` (lookahead) for free. No change to walk.ts (it composes
+    checkLayout, so Walk.create now throws on the new rule automatically).
+  - tests/layout-rules.test.ts (+12), tests/walk.test.ts (+1 'rule 7' Walk.create throw),
+    tests/walk-generator.test.ts (+1 cross-seed/cross-count non-adjacent >= 70px assertion).
+  - scripts/ralph/prd.json: US-023 passes:true + notes. ADR-0007/ADR-0005-qualifier came in via the
+    docs commit (fast-forward, see below).
+- Quality gate: `npm run clean` + `npm run typecheck` clean; `npm test` -> 264 pass (was 252, +12);
+  verify:renderer / verify:controls (34) / verify:main (14) all green (the domain change drives them).
+- **Learnings for future iterations:**
+  - BRANCH STATE: the ralph branch (ralph/90-waypoint-map) was at US-022 (d22bdcc) and did NOT have
+    ADR-0007 or the US-023 PRD entry — those were committed on `main` (c8ae9d8) AFTER the PR #1 merge.
+    The story docs you're asked to implement may live only on main. `git merge-base --is-ancestor HEAD
+    main` confirmed a clean fast-forward (only the 3 docs files differed: prd.json, ADR-0007 new,
+    ADR-0005 +3 lines), so `git merge --ff-only main` brought the branch current before implementing.
+    Always check the branch actually CONTAINS the story spec before starting.
+  - A new spacing rule belongs in BOTH layout-rules (the Walk invariant) AND the generator's
+    `newWaypointConflicts` hot loop, or the generator will place walks the invariant rejects and
+    `Walk.create` throws. Proven load-bearing: dropping just the generator's 70px floor (keeping the
+    invariant) failed 31 tests — generator/use-case(generate-walk)/clear-walk all build real walks.
+  - `assert.throws(fn, /rule/)` matches a SUBSTRING of the joined violation message, so existing
+    per-rule throw fixtures survive a fixture that now ALSO trips the new rule (e.g. walk.test.ts's
+    rule-2 fixture has a non-adjacent WP1/WP4 pair at 52px). Verify this rather than assuming breakage.
+  - For an isolated new-rule fixture: keep all SEGMENTS clear of non-adjacent waypoints (>=35px) and
+    the close pair >=50px (so only the new 70px rule fires, not overlap/segment-clearance). A U-shape
+    folding its far end back near WP1 is a clean generator-shaped fixture for the Walk.create throw.
+---
+
+## 2026-06-28 - US-023 (Minimum gap between non-adjacent waypoints) — REFINEMENT
+- US-023 already passed; re-verified all 7 acceptance criteria green end to end and added one test
+  closing the last untested AC clause (the adjacent-pair exemption, end-to-end in the generator).
+- Re-verification:
+  - layout-rules exports MIN_WAYPOINT_GAP=20 + nonAdjacentWaypointsKeepMinGap (70px floor, adjacent
+    j-i===1 exempt); checkLayout pushes {rule:"non-adjacent-waypoints-too-close"}; Walk.create throws.
+  - walk-generator newWaypointConflicts (1) uses `j===idx-1 ? 50 : 70` so the one adjacent predecessor
+    keeps the overlap floor and every non-adjacent prior gets the min-gap; flows through canExtend.
+  - ADR-0007 present and ADR-0005 carries the qualifier ("touching is not 'intended density'").
+  - npm run clean + typecheck clean; npm test 264->265 pass; verify:renderer / verify:controls (34) /
+    verify:main (14) all green.
+- Refinement made (test only, no impl change): tests/walk-generator.test.ts +1 (now 27 walk-generator,
+  265 total). New test "adjacent waypoints may sit below the 70px floor — the exemption is load-bearing"
+  drives the SAME matrix as the non-adjacent test (counts 10/25/60/90 x seeds 1/4242/99) and asserts the
+  generator places SOME adjacent pair below 70px (the exempt zone). Why it matters: the exemption was
+  only tested on hand-built fixtures in layout-rules.test.ts; the generator test only checked NON-adjacent
+  pairs (j>=i+2), so a 70px floor wrongly applied to adjacent pairs in the GENERATOR was invisible to the
+  suite. Since expectWalk proves Walk.create accepted each walk, this also proves the invariant exempts
+  those close adjacent pairs end-to-end.
+- Files changed: tests/walk-generator.test.ts (+1 test), scripts/ralph/prd.json (refinement note),
+  scripts/ralph/progress.txt (this entry).
+- **Learnings for future iterations:**
+  - PROVED-TO-BITE: removing the generator's adjacent exemption (`j===idx-1 ? 2*WAYPOINT_RADIUS :
+    2*WAYPOINT_RADIUS+MIN_WAYPOINT_GAP` -> always the +GAP form) keeps generation SUCCESSFUL but pushes
+    min adjacent distance 60->70 and the count of adjacent pairs <70px from 46 to 0 of 543 across the
+    test matrix. A pure over-constraint like this (no crash, walks still valid) slips past every
+    "walk is valid / non-adjacent >= 70" assertion — only a test that asserts the exempt zone is
+     EXERCISED catches it. General lesson: an EXEMPTION clause needs a test that the exempt case really
+    occurs in real output, or a regression that tightens it silently passes (cf. the FALSY-sentinel /
+    aspect-min per-binding-term rot lessons).
+  - To empirically probe generator geometry during a refinement, import the COMPILED
+    dist/src/domain/*.js from a throwaway .mjs with ABSOLUTE paths (a /tmp/*.mjs resolves bare
+    "./dist/..." against /tmp, not the repo — use the full repo path or `await import(`${absBase}/x.js`)`).
+  - For a temporary proof-of-bite on an uncommitted source file, `cp src/...ts /tmp/backup.ts` then
+    restore with `cp` (NOT `git checkout`, which would wipe other uncommitted story work) + `npm run clean`.
+---
+
+## 2026-06-28 - US-023 (Minimum gap between non-adjacent waypoints) — REFINEMENT 2
+- US-023 already passed (and had a prior REFINEMENT). Re-verified all 7 acceptance criteria against
+  the implementation and made ONE focused, test-only hardening:
+  - layout-rules.ts: `MIN_WAYPOINT_GAP=20` + `nonAdjacentWaypointsKeepMinGap` (70px floor, adjacent
+    pairs exempt via `j-i===1`) + checkLayout `non-adjacent-waypoints-too-close` rule — all present
+    and correct (AC1/AC2). walk-generator.ts `newWaypointConflicts` rule (1) applies the 70px floor to
+    non-adjacent priors / 50px to the adjacent predecessor (AC3). ADR-0007 documents the decision and
+    qualifies ADR-0005 (AC5). Generator + predicate + boundary tests all present (AC4).
+  - HARDENING: the Walk.create rule-7 throw test (tests/walk.test.ts) used
+    `assert.throws(fn, /non-adjacent-waypoints-too-close/)`, whose comment claimed "only the new
+    min-gap rule fires" but whose assertion only proved the rule name is a SUBSTRING of the joined
+    violation message. A future geometry/threshold drift that made the U-shape trip a 2nd rule would
+    keep the test green and rot the isolation claim. Replaced the regex with a matcher fn that parses
+    the rule list off the message and `deepEqual`s it to exactly ['non-adjacent-waypoints-too-close'],
+    mirroring the checkLayout-level isolation test (layout-rules.test.ts:384 already asserts overlap
+    is NOT also tripped) at the Walk aggregate level.
+- Files changed: tests/walk.test.ts (rule-7 test strengthened); scripts/ralph/prd.json (US-023 notes
+  REFINEMENT 2, passes stays true); scripts/ralph/progress.txt (this entry + extended the Codebase
+  Patterns substring-match note).
+- VERIFIED: npm run clean + npm test → 265 pass (unchanged count; test strengthened in place);
+  typecheck clean; verify:renderer / verify:controls (34) / verify:main (14) all green.
+- PROVEN TO BITE: perturbed the rule-7 U-shape's far end to (120,360) — still orthogonal, 44.7px from
+  WP1 — which trips FOUR rules (overlap + min-gap + segment-too-close + segment-through-circle). The
+  old regex PASSES (name present); the new deepEqual FAILS (4 rules ≠ 1). Reverted to (148,360) via
+  cp-backup + npm run clean; re-ran the full gate green.
+- **Learnings for future iterations:**
+  - A per-rule `Walk.create` (aggregate) throw test that uses `assert.throws(fn, /rule/)` has the same
+    blind spot as the predicate-level substring match: it can't tell "this fixture is rejected SOLELY
+    for rule X" from "rule X is one of several violations". When the test's PURPOSE is isolation, parse
+    the joined message (`Invalid Walk layout: <rule>, <rule>, ...`) and deepEqual the list — don't
+    regex. The companion checkLayout test should still do `v.length===1` / `!v.some(otherRule)`.
+  - A perturbation that "looks" like it should trip a single extra rule can instead cascade into
+    several (moving a waypoint near another also pulls the JOINING segment near non-adjacent waypoints
+    → overlap + min-gap + segment-too-close + segment-through-circle all fire). Keep segments
+    orthogonal when perturbing a fixture, or you trip the diagonal Segment-ctor guard FIRST (a
+    different, less informative failure than the layout cascade you intended to demonstrate).
+---
+
+## 2026-06-29 - US-024 (Turn labels clear of non-adjacent waypoint circles) — AD-HOC REVIEW + IMPLEMENT
+- Ad-hoc run: "review and see if any improvements can be made to story US-024." Found US-024 was
+  UNIMPLEMENTED (passes:false, empty notes) — only ADR-0008 + the PRD story existed (commit ff9affa,
+  docs only). The src had none of the symbols. Reviewed the spec/ADR (sound; verified the 43px
+  threshold, the ~42.58px adjacent-floor case, and the 70px-centre→24px-label bug geometry by hand),
+  then implemented the story against it. Per the run instruction I did NOT edit prd.json (left
+  passes:false and notes empty — a human flips the flag after browser sign-off, see CAVEAT below).
+- What was implemented:
+  - src/domain/layout-rules.ts: added `TURN_LABEL_RADIUS = 10` (the bold-16px "W" glyph footprint
+    disc; ADR-0008) and the pure predicate `turnLabelsClearOfNonAdjacentWaypoints(waypoints)` —
+    every INTERIOR waypoint's `turnLabelPoint` must be >= WAYPOINT_RADIUS+TURN_LABEL_RADIUS+
+    TURN_LABEL_CLEARANCE (43px) from every NON-adjacent waypoint centre; `|i-j|<=1` exempt (both
+    neighbours); terminals skipped as OWNERS but PROTECTED as circles. checkLayout pushes
+    `{rule:"turn-label-too-close-to-waypoint"}` right after the label-vs-segment rule, so Walk.create
+    throws on it with zero change to walk.ts.
+  - src/domain/walk-generator.ts: newWaypointConflicts block (5) — bidirectional 43px mirror (new
+    interior label vs all prior non-adjacent circles incl. terminal j=0; prior interior labels vs the
+    new circle, runs even when the new wp is terminal). Lone exempt neighbour idx-1; imported
+    TURN_LABEL_RADIUS. Flows through canExtend lookahead automatically.
+  - Tests (+11, 265→276): tests/layout-rules.test.ts +8 (TURN_LABEL_RADIUS const + 43px arithmetic +
+    boundary 43-pass/42-fail + adjacent-N-at-60px-exempt(load-bearing) + wildcard-owner-checked +
+    terminal-circle-protected + reported-geometry regression(70px centre passes ADR-0007, 24px label
+    fails) + empty/1/2/3-wp + checkLayout isolation v.length===1). tests/walk.test.ts +1 (Walk.create
+    throw, sole violation parsed-and-deepEqual'd = ["turn-label-too-close-to-waypoint"], like US-023
+    rule 7). tests/walk-generator.test.ts +1 (every interior label clears non-adjacent circles >=43px
+    across counts 10/25/60/90 x seeds 1/4242/99).
+- VERIFIED: npm run clean + npm test → 276 pass (was 265; +11, no regressions); npm run typecheck
+  clean; verify:renderer / verify:controls (34) / verify:main (14) all green (the tighter packing
+  changes walk SHAPES but they stay valid up to count=90). PROOF-OF-BITE: temporarily set the
+  generator's `labelWaypointClearance` to 0 (keeping the invariant) → 23 tests failed (real generated
+  walks now trip the 43px label invariant), proving the generator mirror is load-bearing; reverted
+  via a precise Edit (NOT git checkout — uncommitted files) + npm run clean, re-confirmed 276 pass.
+- No renderer change: US-024 is a GENERATION-SPACE rule; the renderer already draws labels via the
+  shared `turnLabelPoint`. TURN_LABEL_RADIUS is a spacing-model approximation, not a render dimension.
+- **Learnings for future iterations:** (consolidated into Codebase Patterns above)
+  - THREE distinct adjacency conventions now live in layout-rules; the label-vs-waypoint rule uses
+    `|i-j|<=1` (both neighbours), unlike the circle rule's `j-i===1` and the segment rules'
+    `wi===si||wi===si+1`. The generator's exempt neighbour idx-1 is WAYPOINT adjacency, distinct from
+    the SEGMENT-adjacency reason in the adjacent label-vs-segment block — comment the distinction.
+  - One carefully-built orthogonal fixture can isolate a rule at BOTH the checkLayout level
+    (v.length===1) and the Walk.create-throw level (parse the "Invalid Walk layout: <rule>, ..."
+    message and deepEqual the list) — and double as the spec's reported-geometry regression.
+  - CAVEAT (carried from US-013..023): no browser/Playwright MCP in this env, so a LIVE visual
+    confirmation (a label no longer sits on a non-adjacent circle) is pending; the domain tests +
+    headless gates stand in. passes:false intentionally left for a human to flip after sign-off.
+---
+
+## 2026-06-29 09:36 BST - US-024 (review/refinement pass)
+- Ad-hoc task: review US-024 (turn labels clear of non-adjacent waypoint circles) for improvements.
+  The implementation (layout-rules predicate + checkLayout + generator mirror + ADR-0008) was already
+  complete and correct against every AC; the gap was in TEST COVERAGE of the adjacency exemption.
+- What was improved (tests only — no production-code change):
+  - tests/walk-generator.test.ts: added a test proving the label rule's `|i-j|<=1` adjacency EXEMPTION
+    is load-bearing — counts [40,60,90] × seeds 1..12, counting ADJACENT label/circle pairs below the
+    43px floor and asserting `>= 8` (26 observed). Closes the same "unexercised exemption rots silently"
+    gap the US-023 Codebase-Patterns note flags: tightening the floor onto adjacent pairs is a pure
+    over-constraint that every prior assertion passed through. PROVEN TO BITE (see pattern note).
+  - tests/layout-rules.test.ts: added the East-neighbour mirror of the adjacent-exemption boundary
+    fixture (the AC enumerates an "N/E neighbour at the 60px min segment"; only N was previously tested;
+    E is the symmetric ~42.58px case across the NE label ray).
+- Files changed: tests/walk-generator.test.ts, tests/layout-rules.test.ts, scripts/ralph/progress.txt.
+- Quality gate: npm run clean && npm test = 278 pass (was 276); npm run typecheck clean;
+  verify:renderer / verify:controls (34) / verify:main (14) all green.
+- Did NOT touch scripts/ralph/prd.json story flags (ad-hoc run, per instructions).
+- **Learnings for future iterations:**
+  - An exemption clause's exempt-zone test must be sized to a matrix that actually EXERCISES it: US-024's
+    label exempt zone is far narrower than US-023's circle one (needs an N/E-adjacent ~60px segment), so
+    the standard [10,25,60,90]×[1,4242,99] matrix caught only 1 pair. MEASURE the aggregate first, then
+    pick counts/seeds (large counts fire it most) and assert a margin-comfortable lower bound.
+  - When the story under refinement is already COMMITTED, the working tree is clean, so a proof-of-bite
+    temp edit can be reverted with `git checkout <file>` — but a precise reverse Edit + `npm run clean`
+    is still the safer habit (and the only safe option when the story's changes are uncommitted).
+---
+
+## 2026-06-29 09:46 BST - US-024 (refinement: asymmetry direction coverage)
+- REVIEW: US-024 (turn labels clear of non-adjacent waypoint circles) is complete and correct —
+  predicate `turnLabelsClearOfNonAdjacentWaypoints` + `TURN_LABEL_RADIUS=10` + checkLayout rule
+  `turn-label-too-close-to-waypoint` + the generator's two-direction mirror (newWaypointConflicts
+  block 5a/5b) + ADR-0008, all well-tested. The renderer draws the label `bold 16px Arial` centred
+  (textAlign/textBaseline) at `turnLabelPoint`, matching the 10px disc model. Found ONE real test gap.
+- GAP FOUND + CLOSED: label-to-circle clearance is ASYMMETRIC (owner wp[i]'s label vs circle j ≠
+  owner j's label vs circle i — the two labels sit at different points), so the predicate scans the
+  FULL `j = 0..length`, unlike the SYMMETRIC circle-pair rules above it (noWaypointCirclesOverlap /
+  nonAdjacentWaypointsKeepMinGap) which use `j = i + 1`. But EVERY failing fixture in the suite (and
+  the Walk.create rule-8 throw test) placed the label owner at a LOWER array index than the offending
+  protected circle — so a regression "normalising" the inner loop to `j = wi + 1` (to match the
+  symmetric rules) would pass ALL existing tests while silently weakening the invariant in the
+  owner-after-circle direction. This is the exact "a branch/direction no fixture exercises rots"
+  rot the Codebase Patterns section repeatedly warns about.
+- Files changed:
+  - src/domain/layout-rules.ts: added a comment to the predicate's inner loop documenting the
+    asymmetry and WHY the scan must be `j = 0..length` (the invariant-side equivalent of the
+    generator's 5a/5b two directions) — do NOT optimise it to `j = wi + 1`. No behaviour change.
+  - tests/layout-rules.test.ts: added 1 test (279 total, was 278) — an interior owner (index 2)
+    whose NE label sits 30px from a LOWER-indexed non-adjacent START-TERMINAL circle (index 0) is
+    flagged; the only detectable collision is owner-index > protected-index, so it pins the full scan.
+- PROVEN TO BITE: changing the predicate loop to `j = wi + 1` (+ `npm run clean`) failed EXACTLY this
+  one new test (278 pass / 1 fail) and nothing else — precise, non-coupled; reverted via a precise Edit
+  + `npm run clean`. (layout-rules.ts is committed, so `git checkout` would have been safe, but used a
+  precise Edit per the uncommitted-file gotcha habit.)
+- Verified green: `npm test` 279 pass; `npm run typecheck` (tsc -b) clean; verify:renderer/controls/main
+  all OK (unaffected — change is domain + tests only).
+- **Learnings for future iterations:**
+  - An ASYMMETRIC pairwise rule (the protected geometry differs per direction) must scan the FULL
+    `j = 0..length` per owner, NOT `j = i + 1` like a symmetric pair rule — and needs a fixture where
+    the violation is detectable ONLY in the owner-after-protected (lower-index) direction, or that
+    direction rots: a maintainer could "normalise" the loop bound to match the neighbouring symmetric
+    rules and every existing test (which all happened to put the owner first) stays green. Same rot
+    family as the US-023/US-024 exempt-zone-exercised lesson and the falsy-`?seed=0` sentinel.
+  - To make such a test isolate ONE direction: give the higher-index interior owner a single
+    non-adjacent neighbour that is LOWER-indexed (e.g. the start terminal), and place every other
+    waypoint's non-adjacent partner far away, so a `j = wi + 1` regression finds nothing.
 ---
