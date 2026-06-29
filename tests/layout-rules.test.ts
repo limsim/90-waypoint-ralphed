@@ -272,6 +272,31 @@ test("turnLabelsClearOfNonAdjacentWaypoints: 70px-apart circle (ADR-0007 ok) but
   assert.equal(turnLabelsClearOfNonAdjacentWaypoints(wps), false, "but fails the new label rule");
 });
 
+test("turnLabelsClearOfNonAdjacentWaypoints: an owner's label too close to a LOWER-indexed (earlier) circle is flagged (asymmetry; scan is not j>wi)", () => {
+  // Label-to-circle clearance is ASYMMETRIC: owner wp[2]'s label vs wp[0]'s circle is a DIFFERENT
+  // fact from wp[0]'s label vs wp[2]'s circle (the two labels sit at different points), so the rule
+  // must scan EVERY non-adjacent waypoint per owner — including earlier (lower-index) ones — unlike
+  // the SYMMETRIC circle-pair rules above (which correctly use j > i). Every OTHER failing fixture in
+  // this suite (and the Walk.create rule-8 throw test) puts the owner at a LOWER index than the
+  // offending circle, so a regression "normalising" the inner loop to `j = wi + 1` to match the
+  // symmetric rules would pass them all while silently weakening the invariant in this direction.
+  // Here the only detectable collision is owner index 2 → protected index 0: wp[2]'s sole non-adjacent
+  // neighbour is the start TERMINAL wp[0] (its circle is still protected); wp[1]'s sole non-adjacent
+  // neighbour (wp[3]) is far. With `j = wi + 1` wp[0] is skipped and the walk wrongly passes.
+  const label = turnLabelPoint(new Point(0, 0));
+  const wps = [
+    mkWp(1, 4, label.x + 30, label.y), // start (terminal): 30px from wp[2]'s NE label, non-adjacent
+    mkWp(2, 4, 0, 400), // interior, adjacent to wp[2]; far from everything
+    mkWp(3, 4, 0, 0), // owner (interior): NE label = turnLabelPoint(0,0)
+    mkWp(4, 4, 400, 0), // end (terminal): adjacent to wp[2], far
+  ];
+  const ownerLabel = turnLabelPoint(wps[2].position);
+  const d = Math.hypot(wps[0].position.x - ownerLabel.x, wps[0].position.y - ownerLabel.y);
+  assert.ok(d < WAYPOINT_RADIUS + TURN_LABEL_RADIUS + TURN_LABEL_CLEARANCE, `expected <43px, got ${d.toFixed(2)}`);
+  assert.equal(wps[0].isTerminal, true, "the protected lower-indexed circle is the start terminal");
+  assert.equal(turnLabelsClearOfNonAdjacentWaypoints(wps), false);
+});
+
 test("turnLabelsClearOfNonAdjacentWaypoints: empty / single / 2- and 3-waypoint walks pass (no non-adjacent label pairs)", () => {
   assert.equal(turnLabelsClearOfNonAdjacentWaypoints([]), true);
   assert.equal(turnLabelsClearOfNonAdjacentWaypoints([mkWp(1, 2, 0, 0)]), true);

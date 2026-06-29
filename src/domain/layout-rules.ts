@@ -175,6 +175,14 @@ export function turnLabelsClearOfNonAdjacentWaypoints(waypoints: Waypoint[]): bo
   for (let wi = 0; wi < waypoints.length; wi++) {
     if (waypoints[wi].isTerminal) continue; // terminals own no label
     const label = turnLabelPoint(waypoints[wi].position);
+    // Scan EVERY other waypoint, not just j > wi: label-to-circle clearance is ASYMMETRIC (owner
+    // wi's label vs circle j is a different fact from owner j's label vs circle wi, because the two
+    // labels sit at different points), so an earlier (lower-index) circle can be the one a later
+    // owner's label collides with. This differs from the SYMMETRIC circle-pair rules above
+    // (noWaypointCirclesOverlap / nonAdjacentWaypointsKeepMinGap), which correctly use `j = i + 1`.
+    // This single full scan is the invariant-side equivalent of the two directions the generator's
+    // newWaypointConflicts checks incrementally (new label vs prior circles; prior labels vs new
+    // circle) — do NOT "optimise" it to `j = wi + 1`, that would skip the owner-after-circle case.
     for (let j = 0; j < waypoints.length; j++) {
       if (Math.abs(j - wi) <= 1) continue; // self and adjacent neighbours are exempt
       if (

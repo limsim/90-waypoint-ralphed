@@ -2717,3 +2717,43 @@ Started: Sat 27 Jun 2026 18:13:25 BST
     temp edit can be reverted with `git checkout <file>` — but a precise reverse Edit + `npm run clean`
     is still the safer habit (and the only safe option when the story's changes are uncommitted).
 ---
+
+## 2026-06-29 09:46 BST - US-024 (refinement: asymmetry direction coverage)
+- REVIEW: US-024 (turn labels clear of non-adjacent waypoint circles) is complete and correct —
+  predicate `turnLabelsClearOfNonAdjacentWaypoints` + `TURN_LABEL_RADIUS=10` + checkLayout rule
+  `turn-label-too-close-to-waypoint` + the generator's two-direction mirror (newWaypointConflicts
+  block 5a/5b) + ADR-0008, all well-tested. The renderer draws the label `bold 16px Arial` centred
+  (textAlign/textBaseline) at `turnLabelPoint`, matching the 10px disc model. Found ONE real test gap.
+- GAP FOUND + CLOSED: label-to-circle clearance is ASYMMETRIC (owner wp[i]'s label vs circle j ≠
+  owner j's label vs circle i — the two labels sit at different points), so the predicate scans the
+  FULL `j = 0..length`, unlike the SYMMETRIC circle-pair rules above it (noWaypointCirclesOverlap /
+  nonAdjacentWaypointsKeepMinGap) which use `j = i + 1`. But EVERY failing fixture in the suite (and
+  the Walk.create rule-8 throw test) placed the label owner at a LOWER array index than the offending
+  protected circle — so a regression "normalising" the inner loop to `j = wi + 1` (to match the
+  symmetric rules) would pass ALL existing tests while silently weakening the invariant in the
+  owner-after-circle direction. This is the exact "a branch/direction no fixture exercises rots"
+  rot the Codebase Patterns section repeatedly warns about.
+- Files changed:
+  - src/domain/layout-rules.ts: added a comment to the predicate's inner loop documenting the
+    asymmetry and WHY the scan must be `j = 0..length` (the invariant-side equivalent of the
+    generator's 5a/5b two directions) — do NOT optimise it to `j = wi + 1`. No behaviour change.
+  - tests/layout-rules.test.ts: added 1 test (279 total, was 278) — an interior owner (index 2)
+    whose NE label sits 30px from a LOWER-indexed non-adjacent START-TERMINAL circle (index 0) is
+    flagged; the only detectable collision is owner-index > protected-index, so it pins the full scan.
+- PROVEN TO BITE: changing the predicate loop to `j = wi + 1` (+ `npm run clean`) failed EXACTLY this
+  one new test (278 pass / 1 fail) and nothing else — precise, non-coupled; reverted via a precise Edit
+  + `npm run clean`. (layout-rules.ts is committed, so `git checkout` would have been safe, but used a
+  precise Edit per the uncommitted-file gotcha habit.)
+- Verified green: `npm test` 279 pass; `npm run typecheck` (tsc -b) clean; verify:renderer/controls/main
+  all OK (unaffected — change is domain + tests only).
+- **Learnings for future iterations:**
+  - An ASYMMETRIC pairwise rule (the protected geometry differs per direction) must scan the FULL
+    `j = 0..length` per owner, NOT `j = i + 1` like a symmetric pair rule — and needs a fixture where
+    the violation is detectable ONLY in the owner-after-protected (lower-index) direction, or that
+    direction rots: a maintainer could "normalise" the loop bound to match the neighbouring symmetric
+    rules and every existing test (which all happened to put the owner first) stays green. Same rot
+    family as the US-023/US-024 exempt-zone-exercised lesson and the falsy-`?seed=0` sentinel.
+  - To make such a test isolate ONE direction: give the higher-index interior owner a single
+    non-adjacent neighbour that is LOWER-indexed (e.g. the start terminal), and place every other
+    waypoint's non-adjacent partner far away, so a `j = wi + 1` regression finds nothing.
+---
