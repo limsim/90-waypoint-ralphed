@@ -1,10 +1,11 @@
 #!/bin/bash
 # Ralph Wiggum - Long-running AI agent loop
 # Loops a SINGLE user story (or an ad-hoc --prompt task) for the specified number of iterations.
-# Usage: ./ralph.sh [--tool amp|claude] [--model NAME] [--story US-XXX]
+# Runs the Claude Code CLI each iteration.
+# Usage: ./ralph.sh [--model NAME] [--story US-XXX]
 #                   [--prompt "TEXT" | --prompt-file PATH] [max_iterations]
 #   --story        Story ID to loop on. Default: highest-priority story with passes:false.
-#   --model        Model to pass to the tool (e.g. opus, sonnet, claude-opus-4-8). Default: tool's own default.
+#   --model        Model to pass to Claude (e.g. opus, sonnet, claude-opus-4-8). Default: Claude's own default.
 #   --prompt       Free-text task to loop on INSTEAD of a PRD story. Makes --story optional; when set,
 #                  Ralph runs this ad-hoc task and skips story selection (see "prompt mode" below).
 #   --prompt-file  Read the --prompt text from a file instead of the command line (mutually exclusive
@@ -15,8 +16,7 @@
 set -e
 
 # Parse arguments
-TOOL="amp"  # Default to amp for backwards compatibility
-MODEL=""    # Empty = use the tool's own default model
+MODEL=""    # Empty = use Claude's own default model
 MAX_ITERATIONS=3
 STORY_ID=""
 PROMPT_TEXT=""  # Inline ad-hoc task (--prompt); empty = story mode
@@ -24,14 +24,6 @@ PROMPT_FILE=""  # File to read the ad-hoc task from (--prompt-file)
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --tool)
-      TOOL="$2"
-      shift 2
-      ;;
-    --tool=*)
-      TOOL="${1#*=}"
-      shift
-      ;;
     --model)
       MODEL="$2"
       shift 2
@@ -74,13 +66,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Validate tool choice
-if [[ "$TOOL" != "amp" && "$TOOL" != "claude" ]]; then
-  echo "Error: Invalid tool '$TOOL'. Must be 'amp' or 'claude'."
-  exit 1
-fi
-
-# Optional model flag, passed through to the selected tool only when set.
+# Optional model flag, passed through to Claude only when set.
 MODEL_ARGS=()
 if [[ -n "$MODEL" ]]; then
   MODEL_ARGS=(--model "$MODEL")
@@ -216,25 +202,21 @@ Read the PRD from scripts/ralph/prd.json and APPEND your progress to scripts/ral
 progress.txt at the repo root - those copies are invisible to this runner."
 fi
 
-echo "Starting Ralph - Tool: $TOOL - Model: ${MODEL:-default} - Story: $STORY_ID ($STORY_TITLE) - Iterations: $MAX_ITERATIONS"
+echo "Starting Ralph - Tool: claude - Model: ${MODEL:-default} - Story: $STORY_ID ($STORY_TITLE) - Iterations: $MAX_ITERATIONS"
 
 for i in $(seq 1 $MAX_ITERATIONS); do
   echo ""
   echo "==============================================================="
-  echo "  Ralph Iteration $i of $MAX_ITERATIONS - $STORY_ID ($TOOL)"
+  echo "  Ralph Iteration $i of $MAX_ITERATIONS - $STORY_ID (claude)"
   echo "==============================================================="
 
   # Build the prompt: base agent instructions + this-run directive pinning the story.
   PROMPT="$(cat "$SCRIPT_DIR/CLAUDE.md")$RUN_DIRECTIVE"
 
-  # Run the selected tool. We always continue to the next iteration regardless of
+  # Run Claude Code. We always continue to the next iteration regardless of
   # the story's pass state - the full iteration count is the only stop condition.
-  if [[ "$TOOL" == "amp" ]]; then
-    printf '%s' "$PROMPT" | amp --dangerously-allow-all "${MODEL_ARGS[@]}" 2>&1 | tee /dev/stderr || true
-  else
-    # Claude Code: --dangerously-skip-permissions for autonomous operation, --print for output
-    printf '%s' "$PROMPT" | claude --dangerously-skip-permissions --print --output-format stream-json --verbose "${MODEL_ARGS[@]}" 2>&1 | tee /dev/stderr || true
-  fi
+  # --dangerously-skip-permissions for autonomous operation, --print for output
+  printf '%s' "$PROMPT" | claude --dangerously-skip-permissions --print --output-format stream-json --verbose "${MODEL_ARGS[@]}" 2>&1 | tee /dev/stderr || true
 
   # Safety net: capture anything the agent left uncommitted this iteration so each
   # iteration is a discrete commit. No-op when the working tree is already clean.
